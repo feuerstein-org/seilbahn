@@ -75,7 +75,7 @@ def main() -> None:
     root = Path.cwd()
     members = discover_workspace_members(root)
 
-    all_artifacts: list[dict[str, str]] = []
+    all_artifacts: list[dict[str, str | list[str]]] = []
     changed_packages: list[dict[str, str]] = []
 
     for member_dir in members:
@@ -118,7 +118,7 @@ def main() -> None:
             types: list[str] = raw_type if isinstance(raw_type, list) else [raw_type]
 
             for artifact_type in types:
-                entry: dict[str, str] = {
+                entry: dict[str, str | list[str]] = {
                     "name": artifact_name,
                     "type": artifact_type,
                     "version": version,
@@ -126,6 +126,13 @@ def main() -> None:
                 }
                 if "dockerfile" in artifact_def:
                     entry["dockerfile"] = artifact_def["dockerfile"]
+                # extra_files: list of package-relative paths bundled into the
+                # lambda zip alongside the Python install. Ignored for docker
+                # artifacts (Dockerfile manages its own COPYs).
+                if "extra_files" in artifact_def:
+                    entry["extra_files"] = artifact_def["extra_files"]
+                if "extra-files" in artifact_def:
+                    entry["extra_files"] = artifact_def["extra-files"]
                 all_artifacts.append(entry)
 
     docker_artifacts = [a for a in all_artifacts if a["type"] == "docker"]

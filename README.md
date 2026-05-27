@@ -105,13 +105,15 @@ The deploy workflow assumes:
   [tool.bergschacht.artifacts.dagster]
   type = "docker"
   dockerfile = "docker/dagster.Dockerfile"
-  
+
   [tool.bergschacht.artifacts.connector-example]
   type = "lambda"
+  extra-files = ["collector.yaml"]   # optional; lambda only
   ```
 
 - **Docker build context** is always the repo root; `dockerfile` is package-relative.
 - **Lambda packages** are installed via `uv pip install --target` from the package directory.
+- **`extra-files`** (lambda only) lists package-relative paths copied into the zip alongside the Python install. The relative path is preserved, so `["collector.yaml"]` lands at `/var/task/collector.yaml`, `["configs/foo.yaml"]` lands at `/var/task/configs/foo.yaml`. Useful for ADOT collector configs or any non-Python runtime asset that can't ride along inside the wheel. Build fails if a declared path is missing.
 - **mise tasks.** `test.yml` calls `mise run install-ci`, `mise run pre-commit-ci`, `mise run test-ci <package>`. Define these in `mise.ci.toml`.
 
 ## Releasing
@@ -128,7 +130,7 @@ The release workflow pushes commits that modify files under `.github/workflows/`
 
 App id and key are set as secrets on the `release` environment and can only be accessed by the master branch.
 
-To cut a release, run the [`Release` workflow](.github/workflows/release.yml) via **Actions -> Release -> Run workflow**, passing the new semver tag (e.g. `v1.2.0`). The workflow:
+To cut a release, run the [`Release workflow`](.github/workflows/release.yml) via **Actions -> Release -> Run workflow**, passing the new semver tag (e.g. `v1.2.0`). The workflow:
 
 1. Validates the version and refuses to overwrite an existing tag.
 2. Rewrites every `uses: feuerstein-org/seilbahn/...@<ref>` in `.github/workflows/*.yml` to `@v1.2.0`.

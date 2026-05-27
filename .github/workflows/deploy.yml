@@ -228,6 +228,10 @@ jobs:
 
       - name: Build Lambda deployment package
         if: steps.check-lambda.outputs.exists != 'true'
+        env:
+          PACKAGE_PATH: ${{ matrix.artifact.package_path }}
+          # toJson(null) renders "null" when extra_files isn't declared; handled below.
+          EXTRA_FILES_JSON: ${{ toJson(matrix.artifact.extra_files) }}
         run: |
           BUILD_DIR="lambda_build"
           ZIP_NAME="${{ matrix.artifact.name }}-${{ matrix.artifact.version }}.zip"
@@ -237,7 +241,23 @@ jobs:
           uv pip install \
             --target "$BUILD_DIR" \
             --python python3.14 \
-            ./${{ matrix.artifact.package_path }}
+            "./$PACKAGE_PATH"
+
+          # Bundle any extra files declared via [tool.bergschacht.artifacts.<name>].extra-files
+          # alongside the Python install.
+          if [ "$EXTRA_FILES_JSON" != "null" ]; then
+            while IFS= read -r extra; do
+              src="$PACKAGE_PATH/$extra"
+              dest="$BUILD_DIR/$extra"
+              if [ ! -f "$src" ]; then
+                echo "::error::extra-files entry '$extra': $src not found"
+                exit 1
+              fi
+              mkdir -p "$(dirname "$dest")"
+              cp "$src" "$dest"
+              echo "Bundled extra file: $extra"
+            done < <(echo "$EXTRA_FILES_JSON" | jq -r '.[]')
+          fi
 
           cd "$BUILD_DIR"
           zip -r "../$ZIP_NAME" .
