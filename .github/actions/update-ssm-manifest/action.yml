@@ -1,0 +1,42 @@
+name: Update SSM version manifest
+description: >
+  Read deploy-result JSON files (produced earlier in the pipeline) and write
+  artifact metadata to AWS SSM Parameter Store. AWS credentials must already
+  be configured on the job (via aws-actions/configure-aws-credentials).
+
+inputs:
+  repo-name:
+    description: Repository name; used in the SSM parameter path.
+    required: true
+  commit-sha:
+    description: Git commit SHA stamped into each artifact's SSM JSON.
+    required: true
+  ssm-prefix:
+    description: SSM parameter prefix (typically the CDK repo name).
+    required: true
+  results-dir:
+    description: Directory containing deploy-result JSON files.
+    required: false
+    default: deploy-results
+
+outputs:
+  updated:
+    description: '"true" if any SSM parameter was written, "false" otherwise.'
+    value: ${{ steps.run.outputs.updated }}
+
+runs:
+  using: composite
+  steps:
+    - id: install-deps
+      shell: bash
+      run: pip install boto3
+
+    - id: run
+      shell: bash
+      env:
+        REPO_NAME: ${{ inputs.repo-name }}
+        COMMIT_SHA: ${{ inputs.commit-sha }}
+        SSM_PREFIX: ${{ inputs.ssm-prefix }}
+      run: |
+        python3 "${{ github.action_path }}/update_ssm_manifest.py" \
+          --results-dir "${{ inputs.results-dir }}"

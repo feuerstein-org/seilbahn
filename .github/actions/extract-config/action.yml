@@ -1,0 +1,29 @@
+name: Extract workspace config
+description: >
+  Read each workspace member's pyproject.toml, compare against HEAD~1, and emit
+  the artifacts whose package version was bumped. Expects to run with the
+  consumer repo checked out at the current working directory.
+
+outputs:
+  artifacts:
+    description: JSON array of all changed artifacts.
+    value: ${{ steps.run.outputs.artifacts }}
+  docker_artifacts:
+    description: JSON array filtered to type=docker.
+    value: ${{ steps.run.outputs.docker_artifacts }}
+  lambda_artifacts:
+    description: JSON array filtered to type=lambda.
+    value: ${{ steps.run.outputs.lambda_artifacts }}
+  packages:
+    description: JSON array of changed packages ({name, version, path}).
+    value: ${{ steps.run.outputs.packages }}
+  has_changes:
+    description: '"true" when at least one artifact changed, "false" otherwise.'
+    value: ${{ steps.run.outputs.has_changes }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      run: python3 "${{ github.action_path }}/extract_config.py"

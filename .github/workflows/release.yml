@@ -1,0 +1,103 @@
+name: Release
+
+# Cuts an immutable semver release of seilbahn.
+#
+# What it does:
+#   1. Rewrites every `uses: feuerstein-org/seilbahn/...@<ref>` reference in
+#      the workflow files to the new version, then commits + pushes that to
+#      master. master always reflects the latest release's pinned refs.
+#   2. Creates the immutable `vX.Y.Z` tag at that commit.
+#   3. Force-moves `vX.Y` (minor) and `vX` (major) to point at the same commit.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, e.g. v1.2.0 (must be a new semver tag)."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Validate version and check for collisions
+        id: parse
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::Version '$VERSION' is not in vMAJOR.MINOR.PATCH form."
+            exit 1
+          fi
+
+          MAJOR_TAG="v${BASH_REMATCH[1]}"
+          MINOR_TAG="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          echo "major_tag=$MAJOR_TAG" >> "$GITHUB_OUTPUT"
+          echo "minor_tag=$MINOR_TAG" >> "$GITHUB_OUTPUT"
+
+          if git ls-remote --tags origin | grep -q "refs/tags/$VERSION$"; then
+            echo "::error::Tag $VERSION already exists on origin. Bump the version."
+            exit 1
+          fi
+
+      - name: Pin internal action refs to ${{ inputs.version }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          find .github/workflows -name '*.yml' -print0 \
+            | xargs -0 sed -i -E \
+              "s|feuerstein-org/seilbahn/([^@[:space:]]+)@[^[:space:]]+|feuerstein-org/seilbahn/\1@$VERSION|g"
+
+          if git diff --quiet; then
+            echo "No ref changes required — workflows already pinned to $VERSION (or no internal refs found)."
+            echo "no_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "--- rewritten refs ---"
+            git --no-pager diff
+          fi
+
+      - name: Commit and push to master
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if ! git diff --quiet; then
+            git add -A
+            git commit -m "Release $VERSION"
+            git push origin HEAD:master
+          fi
+
+      - name: Create and push tags
+        env:
+          VERSION: ${{ inputs.version }}
+          MAJOR_TAG: ${{ steps.parse.outputs.major_tag }}
+          MINOR_TAG: ${{ steps.parse.outputs.minor_tag }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          git tag -a "$VERSION"   -m "$VERSION" "$SHA"
+          git tag -f "$MAJOR_TAG" "$SHA"
+          git tag -f "$MINOR_TAG" "$SHA"
+
+          git push origin "$VERSION"
+          git push -f origin "$MAJOR_TAG"
+          git push -f origin "$MINOR_TAG"

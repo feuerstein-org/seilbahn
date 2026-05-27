@@ -1,0 +1,355 @@
+name: Deploy
+
+# Deploy pipeline for Feuerstein service repos. Callers invoke this
+# via `uses: feuerstein-org/seilbahn/.github/workflows/deploy.yml@<ref>` from
+# their own deploy workflow. See README.md for the caller template.
+on:
+  workflow_call:
+    # Repo vars (vars.X) are accessible from the reusable workflow against the
+    # caller's repository context. Required from the caller:
+    #   vars.CICD_ACCOUNT_ID, vars.AWS_REGION, vars.ECR_REPOSITORY_NAME,
+    #   vars.LAMBDA_S3_BUCKET_NAME, vars.CDK_REPO_OWNER, vars.CDK_REPO_NAME
+    # Secrets (forward with `secrets: inherit` in the caller):
+    #   secrets.CDK_REPO_APP_ID, secrets.CDK_REPO_APP_PRIVATE_KEY
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  REPO_NAME: ${{ github.event.repository.name }}
+  ROLE_NAME: ${{ github.event.repository.name }}-prod-github-actions-role
+  MISE_OVERRIDE_CONFIG_FILENAMES: "mise.ci.toml"
+
+jobs:
+  extract-config:
+    runs-on: ubuntu-latest
+    outputs:
+      artifacts: ${{ steps.config.outputs.artifacts }}
+      docker_artifacts: ${{ steps.config.outputs.docker_artifacts }}
+      lambda_artifacts: ${{ steps.config.outputs.lambda_artifacts }}
+      packages: ${{ steps.config.outputs.packages }}
+      has_changes: ${{ steps.config.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Extract version and config from workspace
+        id: config
+        uses: feuerstein-org/seilbahn/.github/actions/extract-config@master
+
+  create-tags:
+    name: Create tag (${{ matrix.package.name }}, ${{ matrix.package.version }})
+    runs-on: ubuntu-latest
+    needs: extract-config
+    if: needs.extract-config.outputs.has_changes == 'true'
+    strategy:
+      matrix:
+        package: ${{ fromJson(needs.extract-config.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Create version tag
+        env:
+          VERSION: ${{ matrix.package.version }}
+          PACKAGE_NAME: ${{ matrix.package.name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          TAG="${PACKAGE_NAME}/v${VERSION}"
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+            git fetch origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
+            TAG_COMMIT=$(git rev-list -n 1 "$TAG" 2>/dev/null || echo "")
+
+            if [ "$TAG_COMMIT" = "$CURRENT_COMMIT" ]; then
+              echo "Tag $TAG already exists on current commit. Redeploying."
+            else
+              echo "::error::Tag $TAG already exists on a different commit. Please bump the version of $PACKAGE_NAME before deploying."
+              exit 1
+            fi
+          else
+            echo "Creating tag $TAG..."
+            git tag -a "$TAG" -m "Release $PACKAGE_NAME version $VERSION"
+            git push origin "$TAG"
+            echo "Created and pushed tag $TAG"
+          fi
+
+  deploy-docker-artifacts:
+    name: Deploy Docker image ${{ matrix.artifact.name }}
+    runs-on: ubuntu-latest
+    needs: [extract-config, create-tags]
+    if: needs.extract-config.outputs.has_changes == 'true' && needs.extract-config.outputs.docker_artifacts != '[]'
+    environment:
+      name: prod
+    strategy:
+      fail-fast: true
+      matrix:
+        artifact: ${{ fromJson(needs.extract-config.outputs.docker_artifacts) }}
+    env:
+      ECR_REPOSITORY: ${{ vars.CICD_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.ECR_REPOSITORY_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.CICD_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: GitHubActions-${{ matrix.artifact.name }}-${{ github.run_id }}
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Generate image tag
+        id: docker-tag
+        run: |
+          IMAGE_TAG="${{ env.REPO_NAME }}-${{ matrix.artifact.name }}-${{ matrix.artifact.version }}"
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Check if image already exists
+        id: check-image
+        continue-on-error: true
+        run: |
+          if aws ecr describe-images \
+            --repository-name ${{ vars.ECR_REPOSITORY_NAME }} \
+            --image-ids imageTag="${{ steps.docker-tag.outputs.image_tag }}" \
+            --region ${{ vars.AWS_REGION }} > /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Image already exists in ECR, skipping build"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Image does not exist, will build"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.check-image.outputs.exists != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata (tags, labels) for Docker
+        if: steps.check-image.outputs.exists != 'true'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=raw,value=${{ steps.docker-tag.outputs.image_tag }}
+
+      - name: Build and push to ECR
+        if: steps.check-image.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.artifact.package_path }}/${{ matrix.artifact.dockerfile || 'Dockerfile' }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.artifact.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.artifact.name }}
+
+      - name: Save deploy result
+        run: |
+          mkdir -p deploy-results
+          jq -nc \
+            --arg name "${{ matrix.artifact.name }}" \
+            --arg type "image" \
+            --arg version "${{ matrix.artifact.version }}" \
+            --arg repository "${{ env.ECR_REPOSITORY }}" \
+            --arg imageTag "${{ steps.docker-tag.outputs.image_tag }}" \
+            '{name: $name, type: $type, version: $version, repository: $repository, imageTag: $imageTag}' \
+            > deploy-results/${{ matrix.artifact.name }}-docker.json
+
+      - name: Upload deploy result
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-result-${{ matrix.artifact.name }}-docker
+          path: deploy-results/${{ matrix.artifact.name }}-docker.json
+
+  deploy-lambda-artifacts:
+    name: Deploy Lambda ${{ matrix.artifact.name }}
+    runs-on: ubuntu-latest
+    needs: [extract-config, create-tags]
+    if: needs.extract-config.outputs.has_changes == 'true' && needs.extract-config.outputs.lambda_artifacts != '[]'
+    environment:
+      name: prod
+    strategy:
+      fail-fast: true
+      matrix:
+        artifact: ${{ fromJson(needs.extract-config.outputs.lambda_artifacts) }}
+    env:
+      LAMBDA_S3_BUCKET_NAME: ${{ vars.LAMBDA_S3_BUCKET_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.CICD_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: GitHubActions-${{ matrix.artifact.name }}-${{ github.run_id }}
+
+      - name: Generate S3 key
+        id: s3-key
+        run: |
+          S3_KEY="${{ env.REPO_NAME }}/${{ matrix.artifact.name }}-${{ matrix.artifact.version }}.zip"
+          echo "s3_key=$S3_KEY" >> $GITHUB_OUTPUT
+
+      - name: Check if Lambda package already exists
+        id: check-lambda
+        continue-on-error: true
+        run: |
+          if aws s3api head-object \
+            --bucket ${{ env.LAMBDA_S3_BUCKET_NAME }} \
+            --key "${{ steps.s3-key.outputs.s3_key }}" > /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Lambda package already exists, skipping build"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Lambda package does not exist, will build"
+          fi
+
+      - name: Set up Python for Lambda build
+        if: steps.check-lambda.outputs.exists != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        if: steps.check-lambda.outputs.exists != 'true'
+        uses: astral-sh/setup-uv@v4
+
+      - name: Build Lambda deployment package
+        if: steps.check-lambda.outputs.exists != 'true'
+        run: |
+          BUILD_DIR="lambda_build"
+          ZIP_NAME="${{ matrix.artifact.name }}-${{ matrix.artifact.version }}.zip"
+
+          mkdir -p "$BUILD_DIR"
+
+          uv pip install \
+            --target "$BUILD_DIR" \
+            --python python3.14 \
+            ./${{ matrix.artifact.package_path }}
+
+          cd "$BUILD_DIR"
+          zip -r "../$ZIP_NAME" .
+          cd ..
+
+          echo "Built Lambda package: $ZIP_NAME"
+          ls -lh "$ZIP_NAME"
+
+      - name: Upload Lambda package to S3
+        if: steps.check-lambda.outputs.exists != 'true'
+        run: |
+          aws s3 cp \
+            "${{ matrix.artifact.name }}-${{ matrix.artifact.version }}.zip" \
+            "s3://${{ env.LAMBDA_S3_BUCKET_NAME }}/${{ steps.s3-key.outputs.s3_key }}"
+
+          echo "Uploaded to s3://${{ env.LAMBDA_S3_BUCKET_NAME }}/${{ steps.s3-key.outputs.s3_key }}"
+
+      # Always runs: we need the S3 object version for the manifest even if we skipped build/upload.
+      - name: Get S3 object version
+        id: object-version
+        run: |
+          RESPONSE=$(aws s3api head-object \
+            --bucket ${{ env.LAMBDA_S3_BUCKET_NAME }} \
+            --key "${{ steps.s3-key.outputs.s3_key }}")
+          OBJECT_VERSION=$(echo "$RESPONSE" | jq -r '.VersionId')
+          echo "object_version=$OBJECT_VERSION" >> $GITHUB_OUTPUT
+          echo "S3 object version: $OBJECT_VERSION"
+
+      - name: Save deploy result
+        run: |
+          mkdir -p deploy-results
+          jq -nc \
+            --arg name "${{ matrix.artifact.name }}" \
+            --arg type "lambda" \
+            --arg version "${{ matrix.artifact.version }}" \
+            --arg bucket "${{ env.LAMBDA_S3_BUCKET_NAME }}" \
+            --arg key "${{ steps.s3-key.outputs.s3_key }}" \
+            --arg objectVersion "${{ steps.object-version.outputs.object_version }}" \
+            '{name: $name, type: $type, version: $version, bucket: $bucket, key: $key, objectVersion: $objectVersion}' \
+            > deploy-results/${{ matrix.artifact.name }}-lambda.json
+
+      - name: Upload deploy result
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-result-${{ matrix.artifact.name }}-lambda
+          path: deploy-results/${{ matrix.artifact.name }}-lambda.json
+
+  update-manifest:
+    runs-on: ubuntu-latest
+    needs: [extract-config, deploy-docker-artifacts, deploy-lambda-artifacts]
+    if: |
+      always() &&
+      (needs.deploy-docker-artifacts.result == 'success' || needs.deploy-docker-artifacts.result == 'skipped') &&
+      (needs.deploy-lambda-artifacts.result == 'success' || needs.deploy-lambda-artifacts.result == 'skipped') &&
+      (needs.deploy-docker-artifacts.result == 'success' || needs.deploy-lambda-artifacts.result == 'success')
+    environment:
+      name: prod
+    outputs:
+      updated: ${{ steps.update.outputs.updated }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all deploy results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deploy-result-*
+          path: deploy-results
+          merge-multiple: true
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.CICD_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: GitHubActions-UpdateManifest-${{ github.run_id }}
+
+      - name: Update SSM version manifest
+        id: update
+        uses: feuerstein-org/seilbahn/.github/actions/update-ssm-manifest@master
+        with:
+          repo-name: ${{ env.REPO_NAME }}
+          commit-sha: ${{ github.sha }}
+          ssm-prefix: ${{ vars.CDK_REPO_NAME }}
+          results-dir: deploy-results
+
+  trigger-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: prod
+    needs: [update-manifest]
+    if: always() && needs.update-manifest.outputs.updated == 'true'
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CDK_REPO_APP_ID }}
+          private-key: ${{ secrets.CDK_REPO_APP_PRIVATE_KEY }}
+          owner: ${{ vars.CDK_REPO_OWNER }}
+          repositories: ${{ vars.CDK_REPO_NAME }}
+
+      - name: Trigger CDK deploy workflow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: '${{ vars.CDK_REPO_OWNER }}',
+              repo: '${{ vars.CDK_REPO_NAME }}',
+              workflow_id: 'deploy.yml',
+              ref: 'master',
+              inputs: {
+                pipeline: 'auto'
+              }
+            });
