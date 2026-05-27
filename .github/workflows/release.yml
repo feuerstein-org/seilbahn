@@ -64,7 +64,7 @@ jobs:
         run: |
           find .github/workflows -name '*.yml' -print0 \
             | xargs -0 sed -i -E \
-              "s|feuerstein-org/seilbahn/([^@v1.0.0
+              "s|(feuerstein-org/seilbahn/[^@[:space:]]+)@v[0-9]+(\.[0-9]+)*|\1@${VERSION}|g"
 
           if git diff --quiet; then
             echo "No ref changes required — workflows already pinned to $VERSION (or no internal refs found)."
