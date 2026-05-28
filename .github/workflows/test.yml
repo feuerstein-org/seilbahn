@@ -21,6 +21,19 @@ jobs:
         with:
           cache: true
 
+      - name: Generate token for private deps
+        id: deps-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPS_APP_ID }}
+          private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Configure git for private deps
+        env:
+          GH_TOKEN: ${{ steps.deps-token.outputs.token }}
+        run: git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+
       - name: Install dependencies
         run: mise run install-ci
 
@@ -61,6 +74,19 @@ jobs:
       - uses: jdx/mise-action@v2
         with:
           cache: true
+
+      - name: Generate token for private deps
+        id: deps-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPS_APP_ID }}
+          private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Configure git for private deps
+        env:
+          GH_TOKEN: ${{ steps.deps-token.outputs.token }}
+        run: git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Install dependencies
         run: mise run install-ci

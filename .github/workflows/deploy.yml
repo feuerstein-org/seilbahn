@@ -141,6 +141,15 @@ jobs:
           tags: |
             type=raw,value=${{ steps.docker-tag.outputs.image_tag }}
 
+      - name: Generate token for private deps
+        if: steps.check-image.outputs.exists != 'true'
+        id: deps-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPS_APP_ID }}
+          private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Build and push to ECR
         if: steps.check-image.outputs.exists != 'true'
         uses: docker/build-push-action@v6
@@ -154,6 +163,8 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=${{ matrix.artifact.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.artifact.name }}
+          secrets: |
+            gh_token=${{ steps.deps-token.outputs.token }}
 
       - name: Save deploy result
         run: |
@@ -225,6 +236,21 @@ jobs:
       - name: Install uv
         if: steps.check-lambda.outputs.exists != 'true'
         uses: astral-sh/setup-uv@v4
+
+      - name: Generate token for private deps
+        if: steps.check-lambda.outputs.exists != 'true'
+        id: deps-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DEPS_APP_ID }}
+          private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Configure git for private deps
+        if: steps.check-lambda.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ steps.deps-token.outputs.token }}
+        run: git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Build Lambda deployment package
         if: steps.check-lambda.outputs.exists != 'true'
