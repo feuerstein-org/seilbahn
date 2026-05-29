@@ -85,13 +85,13 @@ Repository vars are inherited from the caller's context automatically. Secrets m
 
 #### Docker artifacts that pull private deps
 
-The `gh_token` build secret is always passed to `docker/build-push-action`, but it's only consumed by Dockerfiles that explicitly mount it, use a `RUN --mount=type=secret` block if you have depend on private repos.
+The `gh_deps_token` build secret is always passed to `docker/build-push-action`, but it's only consumed by Dockerfiles that explicitly mount it, use a `RUN --mount=type=secret` block if you have depend on private repos.
 
 ```dockerfile
-RUN --mount=type=secret,id=gh_token \
-    git config --global url."https://x-access-token:$(cat /run/secrets/gh_token)@github.com/".insteadOf "https://github.com/" \
+RUN --mount=type=secret,id=gh_deps_token \
+    git config --global url."https://x-access-token:$(cat /run/secrets/gh_deps_token)@github.com/".insteadOf "https://github.com/" \
  && uv sync --frozen --no-dev \
- && git config --global --unset url."https://x-access-token:$(cat /run/secrets/gh_token)@github.com/".insteadOf
+ && git config --global --unset url."https://x-access-token:$(cat /run/secrets/gh_deps_token)@github.com/".insteadOf
 ```
 
 BuildKit keeps the secret out of the image layers and the build cache, so the token doesn't leak into the published image. The trailing `git config --unset` is belt-and-braces - strictly only needed if the same shell session does other git work afterwards.

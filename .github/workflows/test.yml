@@ -31,8 +31,8 @@ jobs:
 
       - name: Configure git for private deps
         env:
-          GH_TOKEN: ${{ steps.deps-token.outputs.token }}
-        run: git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          GH_DEPS_TOKEN: ${{ steps.deps-token.outputs.token }}
+        run: git config --global url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Install dependencies
         run: mise run install-ci
@@ -85,8 +85,8 @@ jobs:
 
       - name: Configure git for private deps
         env:
-          GH_TOKEN: ${{ steps.deps-token.outputs.token }}
-        run: git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          GH_DEPS_TOKEN: ${{ steps.deps-token.outputs.token }}
+        run: git config --global url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Install dependencies
         run: mise run install-ci

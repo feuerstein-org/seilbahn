@@ -164,7 +164,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.artifact.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.artifact.name }}
           secrets: |
-            gh_token=${{ steps.deps-token.outputs.token }}
+            gh_deps_token=${{ steps.deps-token.outputs.token }}
 
       - name: Save deploy result
         run: |
@@ -249,8 +249,8 @@ jobs:
       - name: Configure git for private deps
         if: steps.check-lambda.outputs.exists != 'true'
         env:
-          GH_TOKEN: ${{ steps.deps-token.outputs.token }}
-        run: git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          GH_DEPS_TOKEN: ${{ steps.deps-token.outputs.token }}
+        run: git config --global url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Build Lambda deployment package
         if: steps.check-lambda.outputs.exists != 'true'
