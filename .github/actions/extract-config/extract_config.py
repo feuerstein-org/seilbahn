@@ -8,7 +8,7 @@ previous commit to determine which packages need deployment.
 
 Outputs (GITHUB_OUTPUT):
   artifacts  - JSON array of artifacts whose version was bumped. Each entry:
-               {name, type, version, package_path, dockerfile?}
+               {name, type, version, package_path, dockerfile?, target?}
   packages   - JSON array of {name, version, path} for changed packages
 """
 
@@ -126,6 +126,11 @@ def main() -> None:
                 }
                 if "dockerfile" in artifact_def:
                     entry["dockerfile"] = artifact_def["dockerfile"]
+                # target: named multi-stage build target (docker only). Lets one
+                # Dockerfile publish several images that share builder stages
+                # (e.g. a Lambda and an ECS flavor of the same connector).
+                if "target" in artifact_def:
+                    entry["target"] = artifact_def["target"]
                 # extra_files: list of package-relative paths bundled into the
                 # lambda zip alongside the Python install. Ignored for docker
                 # artifacts (Dockerfile manages its own COPYs).

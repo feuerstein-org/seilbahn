@@ -124,9 +124,22 @@ The deploy workflow assumes:
   [tool.bergschacht.artifacts.connector-example]
   type = "lambda"
   extra-files = ["collector.yaml"]   # optional; lambda only
+
+  # One Dockerfile can publish several images via named multi-stage targets:
+  [tool.bergschacht.artifacts.connector-example-ecs-container]
+  type = "docker"
+  dockerfile = "Dockerfile"
+  target = "ecs"                     # optional; docker only
+
+  [tool.bergschacht.artifacts.connector-example-lambda-image]
+  type = "docker"
+  dockerfile = "Dockerfile"
+  target = "lambda"                     # optional; docker only
   ```
 
 - **Docker build context** is always the repo root; `dockerfile` is package-relative.
+- **`target`** (docker only) selects a named multi-stage build target (`docker build --target`), so one Dockerfile can publish multiple images that share builder stages. Omitted = final stage.
+  Careful: an untargeted build produces the **last** stage, so when adding a second target to an existing Dockerfile, declare `target` explicitly on *both* artifacts.
 - **Lambda packages** are installed via `uv pip install --target` from the package directory.
 - **`extra-files`** (lambda only) lists package-relative paths copied into the zip alongside the Python install. The relative path is preserved, so `["collector.yaml"]` lands at `/var/task/collector.yaml`, `["configs/foo.yaml"]` lands at `/var/task/configs/foo.yaml`. Useful for ADOT collector configs or any non-Python runtime asset that can't ride along inside the wheel. Build fails if a declared path is missing.
 - **mise tasks.** `test.yml` calls `mise run install-ci`, `mise run pre-commit-ci`, `mise run test-ci <package>`. Define these in `mise.ci.toml`.

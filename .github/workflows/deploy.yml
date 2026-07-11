@@ -156,6 +156,8 @@ jobs:
         with:
           context: .
           file: ${{ matrix.artifact.package_path }}/${{ matrix.artifact.dockerfile || 'Dockerfile' }}
+          # Optional named multi-stage target; empty (undeclared) builds the final stage.
+          target: ${{ matrix.artifact.target }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
