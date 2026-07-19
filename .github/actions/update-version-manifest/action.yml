@@ -1,0 +1,58 @@
+name: Update version manifest
+description: >
+  Read deploy-result JSON files (produced earlier in the pipeline) and commit
+  the artifact metadata to the CDK repo's committed version manifest
+  (version-manifests/latest.json) via the GitHub contents API. Requires a
+  GitHub App installation token with contents:write on the CDK repo. The
+  manifest commit itself triggers the CDK repo's deploy workflow.
+
+inputs:
+  repo-name:
+    description: Repository name; used as the manifest repositories key.
+    required: true
+  commit-sha:
+    description: Git commit SHA stamped into each artifact's manifest entry.
+    required: true
+  source-repo:
+    description: The app repository in owner/repo form (manifest `source` field).
+    required: true
+  manifest-repo:
+    description: The CDK repository in owner/repo form.
+    required: true
+  manifest-path:
+    description: Path of the manifest file in the CDK repo.
+    required: false
+    default: version-manifests/latest.json
+  manifest-branch:
+    description: Branch of the CDK repo to commit to.
+    required: false
+    default: master
+  github-token:
+    description: GitHub App installation token with contents:write on the CDK repo.
+    required: true
+  results-dir:
+    description: Directory containing deploy-result JSON files.
+    required: false
+    default: deploy-results
+
+outputs:
+  updated:
+    description: '"true" if any deployed version changed (a deploy will follow), "false" otherwise.'
+    value: ${{ steps.run.outputs.updated }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        REPO_NAME: ${{ inputs.repo-name }}
+        COMMIT_SHA: ${{ inputs.commit-sha }}
+        SOURCE_REPO: ${{ inputs.source-repo }}
+        MANIFEST_REPO: ${{ inputs.manifest-repo }}
+        MANIFEST_PATH: ${{ inputs.manifest-path }}
+        MANIFEST_BRANCH: ${{ inputs.manifest-branch }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        python3 "${{ github.action_path }}/update_version_manifest.py" \
+          --results-dir "${{ inputs.results-dir }}"

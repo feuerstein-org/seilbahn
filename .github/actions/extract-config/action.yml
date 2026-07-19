@@ -4,6 +4,16 @@ description: >
   the artifacts whose package version was bumped. Expects to run with the
   consumer repo checked out at the current working directory.
 
+inputs:
+  redeploy-package-version:
+    description: >
+      Rebuild-only redeploy. When set to a release tag `<package>/v<version>`,
+      skip the HEAD~1 version-change detection and emit every artifact of that
+      package (read from the currently checked-out source).
+      Empty = normal change-driven behaviour.
+    required: false
+    default: ""
+
 outputs:
   artifacts:
     description: JSON array of all changed artifacts.
@@ -26,4 +36,6 @@ runs:
   steps:
     - id: run
       shell: bash
+      env:
+        REDEPLOY_PACKAGE_VERSION: ${{ inputs.redeploy-package-version }}
       run: python3 "${{ github.action_path }}/extract_config.py"

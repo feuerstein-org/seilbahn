@@ -11,6 +11,19 @@ on:
     #   vars.LAMBDA_S3_BUCKET_NAME, vars.CDK_REPO_OWNER, vars.CDK_REPO_NAME
     # Secrets (forward with `secrets: inherit` in the caller):
     #   secrets.CDK_REPO_APP_ID, secrets.CDK_REPO_APP_PRIVATE_KEY
+    inputs:
+      redeploy_package_version:
+        description: >
+          Rebuild-only redeploy. A release tag `<package>/v<version>` (created at
+          release time, e.g. `myservice/v1.4.2`). The pipeline checks out this
+          tag and rebuilds every artifact of that package, pushing them to
+          ECR/S3 while skipping tag creation and the version manifest update
+          (and thus the CDK deploy). Use this to repopulate images that aged out
+          of ECR without touching the live environment.
+          Empty (the default) = normal change-driven deploy.
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -33,17 +46,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # redeploy_package_version (when set) builds an explicit past version; otherwise
+          # checkout defaults to the triggering ref. fetch-depth 2 gives HEAD~1
+          # for the normal change-detection path.
+          ref: ${{ inputs.redeploy_package_version }}
           fetch-depth: 2
 
       - name: Extract version and config from workspace
         id: config
         uses: feuerstein-org/seilbahn/.github/actions/extract-config@v1.3.0
+        with:
+          redeploy-package-version: ${{ inputs.redeploy_package_version }}
 
   create-tags:
     name: Create tag (${{ matrix.package.name }}, ${{ matrix.package.version }})
     runs-on: ubuntu-latest
     needs: extract-config
-    if: needs.extract-config.outputs.has_changes == 'true'
+    # Skipped in redeploy mode: the version tag already exists from the original
+    # release, and a rebuild-only redeploy is not cutting a new version.
+    if: needs.extract-config.outputs.has_changes == 'true' && inputs.redeploy_package_version == ''
     strategy:
       matrix:
         package: ${{ fromJson(needs.extract-config.outputs.packages) }}
@@ -85,7 +106,14 @@ jobs:
     name: Deploy Docker image ${{ matrix.artifact.name }}
     runs-on: ubuntu-latest
     needs: [extract-config, create-tags]
-    if: needs.extract-config.outputs.has_changes == 'true' && needs.extract-config.outputs.docker_artifacts != '[]'
+    # always() + explicit result checks so the job still runs when create-tags is
+    # skipped (redeploy mode).
+    if: |
+      always() &&
+      needs.extract-config.result == 'success' &&
+      (needs.create-tags.result == 'success' || needs.create-tags.result == 'skipped') &&
+      needs.extract-config.outputs.has_changes == 'true' &&
+      needs.extract-config.outputs.docker_artifacts != '[]'
     environment:
       name: prod
     strategy:
@@ -96,6 +124,8 @@ jobs:
       ECR_REPOSITORY: ${{ vars.CICD_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.ECR_REPOSITORY_NAME }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.redeploy_package_version }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -190,7 +220,14 @@ jobs:
     name: Deploy Lambda ${{ matrix.artifact.name }}
     runs-on: ubuntu-latest
     needs: [extract-config, create-tags]
-    if: needs.extract-config.outputs.has_changes == 'true' && needs.extract-config.outputs.lambda_artifacts != '[]'
+    # always() + explicit result checks so the job still runs when create-tags is
+    # skipped (redeploy mode).
+    if: |
+      always() &&
+      needs.extract-config.result == 'success' &&
+      (needs.create-tags.result == 'success' || needs.create-tags.result == 'skipped') &&
+      needs.extract-config.outputs.has_changes == 'true' &&
+      needs.extract-config.outputs.lambda_artifacts != '[]'
     environment:
       name: prod
     strategy:
@@ -201,6 +238,8 @@ jobs:
       LAMBDA_S3_BUCKET_NAME: ${{ vars.LAMBDA_S3_BUCKET_NAME }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.redeploy_package_version }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -336,8 +375,11 @@ jobs:
   update-manifest:
     runs-on: ubuntu-latest
     needs: [extract-config, deploy-docker-artifacts, deploy-lambda-artifacts]
+    # inputs.redeploy_package_version == '' skips the manifest update in rebuild-only
+    # redeploy mode - the images are put back in ECR without moving the live version.
     if: |
       always() &&
+      inputs.redeploy_package_version == '' &&
       (needs.deploy-docker-artifacts.result == 'success' || needs.deploy-docker-artifacts.result == 'skipped') &&
       (needs.deploy-lambda-artifacts.result == 'success' || needs.deploy-lambda-artifacts.result == 'skipped') &&
       (needs.deploy-docker-artifacts.result == 'success' || needs.deploy-lambda-artifacts.result == 'success')
@@ -355,29 +397,6 @@ jobs:
           path: deploy-results
           merge-multiple: true
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ vars.CICD_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
-          aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: GitHubActions-UpdateManifest-${{ github.run_id }}
-
-      - name: Update SSM version manifest
-        id: update
-        uses: feuerstein-org/seilbahn/.github/actions/update-ssm-manifest@v1.3.0
-        with:
-          repo-name: ${{ env.REPO_NAME }}
-          commit-sha: ${{ github.sha }}
-          ssm-prefix: ${{ vars.CDK_REPO_NAME }}
-          results-dir: deploy-results
-
-  trigger-deploy:
-    runs-on: ubuntu-latest
-    environment:
-      name: prod
-    needs: [update-manifest]
-    if: always() && needs.update-manifest.outputs.updated == 'true'
-    steps:
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -387,17 +406,16 @@ jobs:
           owner: ${{ vars.CDK_REPO_OWNER }}
           repositories: ${{ vars.CDK_REPO_NAME }}
 
-      - name: Trigger CDK deploy workflow
-        uses: actions/github-script@v7
+      # Commits the new artifact versions to the CDK repo's committed manifest.
+      # The push itself triggers the CDK repo's deploy.yml (version-manifests/**
+      # path filter).
+      - name: Update version manifest
+        id: update
+        uses: feuerstein-org/seilbahn/.github/actions/update-version-manifest@v1.3.0
         with:
+          repo-name: ${{ env.REPO_NAME }}
+          commit-sha: ${{ github.sha }}
+          source-repo: ${{ github.repository }}
+          manifest-repo: ${{ vars.CDK_REPO_OWNER }}/${{ vars.CDK_REPO_NAME }}
           github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: '${{ vars.CDK_REPO_OWNER }}',
-              repo: '${{ vars.CDK_REPO_NAME }}',
-              workflow_id: 'deploy.yml',
-              ref: 'master',
-              inputs: {
-                pipeline: 'auto'
-              }
-            });
+          results-dir: deploy-results

@@ -7,15 +7,15 @@ Shared GitHub Actions reusable workflows and CI scripts for Feuerstein service r
 ```
 .github/
   workflows/
-    deploy.yml                              # reusable: build & publish docker/lambda artifacts, update SSM, trigger CDK deploy
+    deploy.yml                              # reusable: build & publish docker/lambda artifacts, commit version manifest update
     test.yml                                # reusable: pre-commit + parallel pytest matrix per package
   actions/
     extract-config/
       action.yml                            # composite action wrapping the script below
       extract_config.py                     # reads workspace pyproject.toml's, emits changed artifacts
-    update-ssm-manifest/
+    update-version-manifest/
       action.yml
-      update_ssm_manifest.py                # writes artifact metadata to SSM after a deploy
+      update_version_manifest.py            # commits artifact metadata to the CDK repo's manifest after a deploy
 ```
 
 ## How callers use it
@@ -31,6 +31,12 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      redeploy_package_version:
+        description: "Rebuild-only: release tag <package>/v<version> to rebuild & push to ECR/S3 (leave blank for a normal deploy)"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -40,6 +46,9 @@ jobs:
   deploy:
     uses: feuerstein-org/seilbahn/.github/workflows/deploy.yml@v1
     secrets: inherit
+    # On push this input is empty -> normal change-driven deploy.
+    with:
+      redeploy_package_version: ${{ inputs.redeploy_package_version }}
 ```
 
 `.github/workflows/test.yml`:
@@ -59,13 +68,24 @@ jobs:
     secrets: inherit
 ```
 
+## Rebuilding an image that aged out of ECR (redeploy)
+
+GitHub only offers **Re-run** for ~30 days after a run, and old images are pruned from ECR by lifecycle policy. When you need a past image back - e.g. to pull and troubleshoot it locally - use the redeploy input instead of re-running:
+
+1. In the consumer repo: **Actions -> Deploy -> Run workflow**.
+2. Set `redeploy_package_version` to that version's tag (created at release time as `<package>/v<version>`, e.g. `myservice/v1.4.2`).
+
+This runs a **rebuild-only** path: it checks out that tag, parses the package name from it, and rebuilds **every** artifact declared by that package, pushing them to ECR/S3. It deliberately **skips** tag creation and the version manifest update (and thus the CDK deploy), so the live environment is untouched - the images simply reappear in ECR for you to pull. (Rebuilds are content-checked, so artifacts still present in ECR/S3 are skipped rather than rebuilt.)
+
+> Rolling the running environment *back* to an old version is intentionally not supported here: `update-version-manifest` only ever moves `latest` forward (`is_newer_version`). A rollback is a deliberate act performed in the CDK repo: add a `pinned` block with the old version to the entry in `version-manifests/latest.json`, commit and push.
+
 ## Required configuration in the consumer repo
 
 ### Variables (`vars.*`)
 
 | Variable                | Used by  | Purpose                                                          |
 | ----------------------- | -------- | ---------------------------------------------------------------- |
-| `CICD_ACCOUNT_ID`       | deploy   | AWS account for ECR / S3 / SSM / OIDC role assumption            |
+| `CICD_ACCOUNT_ID`       | deploy   | AWS account for ECR / S3 / OIDC role assumption                  |
 | `AWS_REGION`            | deploy   | AWS region                                                       |
 | `ECR_REPOSITORY_NAME`   | deploy   | ECR repo for docker artifacts                                    |
 | `LAMBDA_S3_BUCKET_NAME` | deploy   | S3 bucket Lambda artifacts                                     |
@@ -76,7 +96,7 @@ jobs:
 
 | Secret                     | Used by      | Purpose                                                                                  |
 | -------------------------- | ------------ | ---------------------------------------------------------------------------------------- |
-| `CDK_REPO_APP_ID`          | deploy       | GitHub App ID for triggering workflows in CDK repo                                       |
+| `CDK_REPO_APP_ID`          | deploy       | GitHub App ID for committing manifest updates to the CDK repo (needs `contents: write`)  |
 | `CDK_REPO_APP_PRIVATE_KEY` | deploy       | GitHub App private key                                                                   |
 | `DEPS_APP_ID`              | test, deploy | GitHub App ID for cloning private workspace-org repos pulled in via `[tool.uv.sources]`  |
 | `DEPS_APP_PRIVATE_KEY`     | test, deploy | GitHub App private key for the same                                                      |
@@ -100,7 +120,7 @@ BuildKit keeps the secret out of the image layers and the build cache, so the to
 
 The deploy pipeline references two GitHub environments in the caller repo:
 
-- `prod` - gates `deploy-docker-artifacts`, `deploy-lambda-artifacts`, `update-manifest`, `trigger-deploy`.
+- `prod` - gates `deploy-docker-artifacts`, `deploy-lambda-artifacts`, `update-manifest`.
 - `dev`  - gates the `test-python-packages` job in `test.yml`.
 
 Create both environments (with whatever protection rules you want) in each consumer repo.
@@ -143,6 +163,20 @@ The deploy workflow assumes:
 - **Lambda packages** are installed via `uv pip install --target` from the package directory.
 - **`extra-files`** (lambda only) lists package-relative paths copied into the zip alongside the Python install. The relative path is preserved, so `["collector.yaml"]` lands at `/var/task/collector.yaml`, `["configs/foo.yaml"]` lands at `/var/task/configs/foo.yaml`. Useful for ADOT collector configs or any non-Python runtime asset that can't ride along inside the wheel. Build fails if a declared path is missing.
 - **mise tasks.** `test.yml` calls `mise run install-ci`, `mise run pre-commit-ci`, `mise run test-ci <package>`. Define these in `mise.ci.toml`.
+
+## Known limitations (version manifest)
+
+The version manifest lives as a git-committed file (`version-manifests/latest.json`) in the CDK repo, written by `update-version-manifest` via the GitHub contents API. Two known gaps are deliberately left open for now.
+
+### 1. The manifest-write token can write anything in the CDK repo
+
+`update-version-manifest` authenticates with a GitHub App installation token (`CDK_REPO_APP_ID` / `CDK_REPO_APP_PRIVATE_KEY`) scoped to the CDK repo with `contents: write`. GitHub App permissions are **per-repo, not per-path** - there is no way to grant "may write only `version-manifests/**`". So this token can commit arbitrary content **anywhere** in the CDK repo (all of the infrastructure-as-code, not just the manifest).
+
+**Planned fix:** move the version manifests into their own dedicated repo and scope the token to that repo only, so the blast radius of a leaked token (or a compromised third-party action in the deploy job) is limited to manifest data rather than the deployable infrastructure.
+
+### 2. Multiple manifest files are not supported
+
+In the future when there are more CDK repos or multiple version manifests this workflow simply wont be able to realistically support it.
 
 ## Releasing
 
