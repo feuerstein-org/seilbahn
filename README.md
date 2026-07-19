@@ -77,6 +77,8 @@ GitHub only offers **Re-run** for ~30 days after a run, and old images are prune
 
 This runs a **rebuild-only** path: it checks out that tag, parses the package name from it, and rebuilds **every** artifact declared by that package, pushing them to ECR/S3. It deliberately **skips** tag creation and the version manifest update (and thus the CDK deploy), so the live environment is untouched - the images simply reappear in ECR for you to pull. (Rebuilds are content-checked, so artifacts still present in ECR/S3 are skipped rather than rebuilt.)
 
+Note that for image Lambdas which show an "The function is trying to use a deleted image." error you need to manually update the Lambda config to point to essentially the same image (via tag). The reason is that the Lambda resolves the actual sha hash on deployment and a redeployed image doesn't guarantee the same has value to be produced (build time differences, base image changed etc.).
+
 > Rolling the running environment *back* to an old version is intentionally not supported here: `update-version-manifest` only ever moves `latest` forward (`is_newer_version`). A rollback is a deliberate act performed in the CDK repo: add a `pinned` block with the old version to the entry in `version-manifests/latest.json`, commit and push.
 
 ## Required configuration in the consumer repo
