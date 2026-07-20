@@ -44,7 +44,7 @@ jobs:
       packages: ${{ steps.config.outputs.packages }}
       has_changes: ${{ steps.config.outputs.has_changes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # redeploy_package_version (when set) builds an explicit past version; otherwise
           # checkout defaults to the triggering ref. Change detection reads the HEAD sha
@@ -69,7 +69,7 @@ jobs:
       matrix:
         package: ${{ fromJson(needs.extract-config.outputs.packages) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: true
           fetch-depth: 0
@@ -123,12 +123,12 @@ jobs:
     env:
       ECR_REPOSITORY: ${{ vars.CICD_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.ECR_REPOSITORY_NAME }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.redeploy_package_version }}
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::${{ vars.CICD_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -160,12 +160,12 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.check-image.outputs.exists != 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Extract metadata (tags, labels) for Docker
         if: steps.check-image.outputs.exists != 'true'
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.ECR_REPOSITORY }}
           tags: |
@@ -174,7 +174,7 @@ jobs:
       - name: Generate token for private deps
         if: steps.check-image.outputs.exists != 'true'
         id: deps-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.DEPS_APP_ID }}
           private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
@@ -182,7 +182,7 @@ jobs:
 
       - name: Build and push to ECR
         if: steps.check-image.outputs.exists != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.artifact.package_path }}/${{ matrix.artifact.dockerfile || 'Dockerfile' }}
@@ -211,7 +211,7 @@ jobs:
             > deploy-results/${{ matrix.artifact.name }}-docker.json
 
       - name: Upload deploy result
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: deploy-result-${{ matrix.artifact.name }}-docker
           path: deploy-results/${{ matrix.artifact.name }}-docker.json
@@ -237,12 +237,12 @@ jobs:
     env:
       LAMBDA_S3_BUCKET_NAME: ${{ vars.LAMBDA_S3_BUCKET_NAME }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.redeploy_package_version }}
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::${{ vars.CICD_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -270,18 +270,18 @@ jobs:
 
       - name: Set up Python for Lambda build
         if: steps.check-lambda.outputs.exists != 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.14"
 
       - name: Install uv
         if: steps.check-lambda.outputs.exists != 'true'
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v7
 
       - name: Generate token for private deps
         if: steps.check-lambda.outputs.exists != 'true'
         id: deps-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.DEPS_APP_ID }}
           private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
@@ -367,7 +367,7 @@ jobs:
             > deploy-results/${{ matrix.artifact.name }}-lambda.json
 
       - name: Upload deploy result
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: deploy-result-${{ matrix.artifact.name }}-lambda
           path: deploy-results/${{ matrix.artifact.name }}-lambda.json
@@ -388,10 +388,10 @@ jobs:
     outputs:
       updated: ${{ steps.update.outputs.updated }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download all deploy results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: deploy-result-*
           path: deploy-results
@@ -399,7 +399,7 @@ jobs:
 
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.CDK_REPO_APP_ID }}
           private-key: ${{ secrets.CDK_REPO_APP_PRIVATE_KEY }}
