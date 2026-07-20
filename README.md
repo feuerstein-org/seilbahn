@@ -68,6 +68,16 @@ jobs:
     secrets: inherit
 ```
 
+## How a deploy decides what to ship (change detection)
+
+On every push the deploy workflow runs **once, at the tip** of whatever was pushed. `extract-config` decides which packages to (re)deploy by comparing each workspace member's version `N` against the release tags on the remote (a single `git ls-remote --tags`):
+
+- **tag absent** -> a new, unreleased version -> deploy and create the tag.
+- **tag points at HEAD** -> a re-run or redeploy of this exact commit -> deploy again; the tag / ECR / S3 content checks make the rebuilds idempotent.
+- **tag points at any other commit** -> `N` was already released elsewhere, so this is a no-op push -> skip.
+
+> Note: If a push contains commits A (the version bump), B, C, the tag `<name>/v<N>` is created at **C** (the tip), because the build ships `tree-at-C` — including B's and C's changes — and the [redeploy path](#rebuilding-an-image-that-aged-out-of-ecr-redeploy) checks out the tag to reproduce that exact artifact. A version bump is the intent to release; the tag records the tree that was actually built.
+
 ## Rebuilding an image that aged out of ECR (redeploy)
 
 GitHub only offers **Re-run** for ~30 days after a run, and old images are pruned from ECR by lifecycle policy. When you need a past image back - e.g. to pull and troubleshoot it locally - use the redeploy input instead of re-running:
@@ -135,7 +145,7 @@ The deploy workflow assumes an IAM role named `${repo}-prod-github-actions-role`
 
 The deploy workflow assumes:
 
-- **uv workspace.** `[tool.uv.workspace.members]` in the root `pyproject.toml`. Members are scanned for version changes vs `HEAD~1`.
+- **uv workspace.** `[tool.uv.workspace.members]` in the root `pyproject.toml`. Members are scanned for release-worthy version changes via their remote tags (see [change detection](#how-a-deploy-decides-what-to-ship-change-detection)).
 - **Artifact declarations.** Each package's `pyproject.toml` declares deployable artifacts under `[tool.bergschacht.artifacts.<name>]`:
 
   ```toml

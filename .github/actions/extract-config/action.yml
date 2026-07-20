@@ -1,15 +1,17 @@
 name: Extract workspace config
 description: >
-  Read each workspace member's pyproject.toml, compare against HEAD~1, and emit
-  the artifacts whose package version was bumped. Expects to run with the
-  consumer repo checked out at the current working directory.
+  Read each workspace member's pyproject.toml and emit the artifacts of every
+  package whose release tag `name/vN` is missing (a new version) or points at the
+  checked-out HEAD (a redeploy). Uses `git ls-remote --tags` as the source of
+  truth, so detection is independent of how a push is shaped. Expects to run with
+  the consumer repo checked out at the current working directory.
 
 inputs:
   redeploy-package-version:
     description: >
       Rebuild-only redeploy. When set to a release tag `<package>/v<version>`,
-      skip the HEAD~1 version-change detection and emit every artifact of that
-      package (read from the currently checked-out source).
+      skip tag-based change detection and emit every artifact of that package
+      (read from the currently checked-out source).
       Empty = normal change-driven behaviour.
     required: false
     default: ""
