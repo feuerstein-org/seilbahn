@@ -47,10 +47,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # redeploy_package_version (when set) builds an explicit past version; otherwise
-          # checkout defaults to the triggering ref. fetch-depth 2 gives HEAD~1
-          # for the normal change-detection path.
+          # checkout defaults to the triggering ref. Change detection reads the HEAD sha
+          # and `git ls-remote --tags`, so a shallow checkout is enough.
           ref: ${{ inputs.redeploy_package_version }}
-          fetch-depth: 2
+          fetch-depth: 1
 
       - name: Extract version and config from workspace
         id: config

@@ -3,8 +3,8 @@
 Extract version and deployment artifact config from a uv workspace.
 
 Discovers workspace members from the root pyproject.toml, reads each member's
-pyproject.toml for version and artifact config, and compares each against the
-previous commit to determine which packages need deployment.
+pyproject.toml for version and artifact config, and uses the release tags on the
+remote (`name/vN`) to determine which packages need deployment.
 
 Outputs (GITHUB_OUTPUT):
   artifacts  - JSON array of artifacts whose version was bumped. Each entry:
@@ -105,28 +105,64 @@ def build_artifact_entries(
     return entries
 
 
-def get_previous_version(pyproject_rel: str) -> str | None:
-    """Get the version from the previous commit for a pyproject.toml path."""
+def get_head_sha() -> str:
+    """Return the commit sha of the checked-out HEAD."""
+    result = subprocess.run(  # noqa: S603
+        ["git", "rev-parse", "HEAD"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def get_released_tags(remote: str = "origin") -> dict[str, str]:
+    """
+    Map each release tag on the remote to the commit it points at.
+
+    A single `git ls-remote --tags` call is the source of truth for "which
+    versions have been released".
+    """
     try:
         result = subprocess.run(  # noqa: S603
-            ["git", "show", f"HEAD~1:{pyproject_rel}"],  # noqa: S607
+            ["git", "ls-remote", "--tags", remote],  # noqa: S607
             capture_output=True,
             text=True,
             check=True,
         )
-        prev_config = tomllib.loads(result.stdout)
-        return prev_config["project"]["version"]
-    # GitHub Actions run an older Python version that requires the brackets, hence disabling formatting
-    except (subprocess.CalledProcessError, KeyError, tomllib.TOMLDecodeError):  # fmt: skip
-        # File didn't exist or wasn't parseable - treat as new package
-        return None
+    except subprocess.CalledProcessError:
+        # No remote / no tags - treat everything as unreleased.
+        return {}
+
+    tags: dict[str, str] = {}
+    prefix = "refs/tags/"
+    for line in result.stdout.splitlines():
+        sha, _, ref = line.partition("\t")
+        if not ref.startswith(prefix):
+            continue
+        tag = ref[len(prefix) :]
+        # annotated tag
+        if tag.endswith("^{}"):
+            tags[tag[:-3]] = sha
+        else:
+            tags.setdefault(tag, sha)
+    return tags
 
 
 def collect_changed_artifacts(
     root: Path,
     members: list[Path],
+    released_tags: dict[str, str],
+    head_sha: str,
 ) -> tuple[list[dict[str, str | list[str]]], list[dict[str, str]]]:
-    """Normal path: emit artifacts for every member whose version was bumped vs HEAD~1."""
+    """
+    Normal path: emit artifacts for every member that still needs releasing.
+
+    A member at version N is "changed" if its release tag `name/vN` is either
+    absent (a new, unreleased version) or already points at HEAD (a re-run or
+    redeploy of this exact commi. A tag on any other commit means the version was already
+    released elsewhere, so this is a no-op push and the member is skipped.
+    """
     all_artifacts: list[dict[str, str | list[str]]] = []
     changed_packages: list[dict[str, str]] = []
 
@@ -136,18 +172,17 @@ def collect_changed_artifacts(
 
         name: str = config["project"]["name"]
         version: str = config["project"]["version"]
-        pyproject_rel = str(pyproject_path.relative_to(root))
 
-        # Check if version was bumped compared to previous commit
-        prev_version = get_previous_version(pyproject_rel)
-        if prev_version == version:
-            print(f"  {name} v{version} - unchanged, skipping")
-            continue
-
-        if prev_version is None:
-            print(f"  {name} v{version} - new package")
+        tag_commit = released_tags.get(f"{name}/v{version}")
+        if tag_commit is None:
+            print(f"  {name} v{version} - new release")
+        elif tag_commit == head_sha:
+            print(f"  {name} v{version} - tag on current commit, redeploying")
         else:
-            print(f"  {name} v{version} - bumped from {prev_version}")
+            print(
+                f"  {name} v{version} - already released at {tag_commit[:8]}, skipping"
+            )
+            continue
 
         changed_packages.append(
             {
@@ -245,7 +280,9 @@ def main() -> None:
             root, members, redeploy_package_version
         )
     else:
-        all_artifacts, changed_packages = collect_changed_artifacts(root, members)
+        all_artifacts, changed_packages = collect_changed_artifacts(
+            root, members, get_released_tags(), get_head_sha()
+        )
 
     docker_artifacts = [a for a in all_artifacts if a["type"] == "docker"]
     lambda_artifacts = [a for a in all_artifacts if a["type"] == "lambda"]
