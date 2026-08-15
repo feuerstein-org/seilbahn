@@ -1,0 +1,29 @@
+name: CI
+
+# seilbahn's own checks.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  MISE_OVERRIDE_CONFIG_FILENAMES: "mise.ci.toml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          cache: true
+
+      - name: Install dependencies
+        run: mise run install-ci
+
+      - name: Pre-commit (lint, format, type check)
+        run: mise run pre-commit-ci
+
+      - name: Test
+        run: mise run test-ci

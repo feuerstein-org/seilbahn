@@ -1,0 +1,94 @@
+[project]
+name = "seilbahn"
+version = "0"
+description = "Tests for seilbahn's composite action scripts"
+requires-python = ">=3.14"
+
+# Not a distributable package - this project exists only to lint and test the
+# scripts under .github/actions/, which ship as plain files to the runner.
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "coverage",
+    "pytest",
+    "pytest-randomly",
+    "pyright[nodejs]",
+    "ruff",
+    "jsonschema>=4.26.0",
+    "types-jsonschema>=4.26.0.20260518",
+]
+
+# The scripts live under .github/, which ruff, pyright and coverage all skip by
+# default as a dot-directory - every tool below is pointed at them explicitly.
+[tool.coverage.run]
+branch = true
+source = [".github/actions"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    'if TYPE_CHECKING:',
+    'pragma: no cover',
+    'if __name__ == "__main__":',
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+force-exclude = true
+extend-include = [".github/actions/**/*.py"]
+lint.select = ["ALL"]
+lint.ignore = [
+    "ANN401",   # Disallow typing.Any
+    "ANN204",   # Require return type annotation for magic methods
+    "COM812",   # Require trailing commas - conflicts with ruff formatter
+    "CPY001",   # Require a copyright notice at the top of every file
+    "D105",     # Require docstrings in magic methods
+    "D200",     # Require one-line docstrings to fit on one line
+    "D203",     # Require 1 blank line before class docstring
+    "D212",     # Require multi-line docstring summary to start at the first line
+    "D400",     # Require first line of docstring to end with a period
+    "D401",     # Require first line of docstring to be in imperative mood
+    "D415",     # Require first line of docstring to end with punctuation
+    "FIX002",   # Require TODO comments to contain issue links
+    "PGH003",   # Disallow blanket type: ignore comments
+    "TC002",    # Require third-party imports only used for type annotations to be in TYPE_CHECKING blocks
+    "TC003",    # Require standard imports only used for type annotations to be in TYPE_CHECKING blocks
+    "TD002",    # Require author in TODO comments
+    "TD003",    # Require issue link in TODO comments
+    "TRY003",   # Disallow long exception messages outside exception class
+    "TRY400"    # Require logging.exception instead of logging.error in exception handlers
+]
+lint.unfixable = []
+
+[tool.ruff.lint.per-file-ignores]
+".github/actions/*" = [
+    "INP001",   # Require packages to have an __init__.py file
+    "T201",     # Disallow print - the action's log *is* print
+]
+"tests/*" = [
+    "INP001",   # Require packages to have an __init__.py file
+    "PLR2004",  # Disallow magic values
+    "PLR0913",  # Disallow too many arguments
+    "S101",     # Disallow use of assert
+    "SLF001",   # Disallow accessing private members
+    "S108",     # Disallow hardcoded temp file paths
+]
+
+[tool.pyright]
+include = [".github/actions", "tests"]
+# Pyright's default exclude is `**/.*`, which excludes all of .github
+exclude = ["**/node_modules", "**/__pycache__", "**/.venv", "**/.git"]
+pythonVersion = "3.14"
+pythonPlatform = "Linux"
+typeCheckingMode = "strict"
+
+# Strict minus the "prove a type for this inferred local" family. These scripts
+# walk data that is dynamic on purpose - parsed TOML/JSON. This means they have weak typing
+# but the data is 100% validated beforehand.
+reportUnknownVariableType = false
+reportUnknownMemberType = false
+reportUnknownArgumentType = false

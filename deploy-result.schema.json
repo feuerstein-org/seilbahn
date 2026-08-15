@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/master/deploy-result.schema.json",
+  "title": "seilbahn deploy result",
+  "description": "One artifact published by a deploy job, written as JSON by deploy.yml and read by the update-version-manifest action. Validating these before the manifest is written is what keeps a malformed value from being committed to the CDK repo. The `version` and name patterns below therefore mirror bergschacht's version-manifest.schema.json.",
+  "type": "object",
+  "required": [
+    "name",
+    "type",
+    "version"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "$ref": "#/$defs/artifactName",
+      "description": "Artifact name - becomes the manifest key CDK looks up."
+    },
+    "type": {
+      "enum": [
+        "image",
+        "lambda"
+      ],
+      "description": "Which half of the manifest this lands in - images or lambdas."
+    },
+    "version": {
+      "$ref": "#/$defs/version"
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 1,
+      "description": "image only. Full ECR repository URI."
+    },
+    "imageTag": {
+      "type": "string",
+      "minLength": 1,
+      "description": "image only. Tag the image was pushed under."
+    },
+    "bucket": {
+      "type": "string",
+      "minLength": 1,
+      "description": "lambda only. S3 bucket holding the zip."
+    },
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "lambda only. S3 object key of the zip."
+    },
+    "objectVersion": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "const": "null"
+      },
+      "description": "lambda only. S3 object version id - what pins the deploy to this exact upload."
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "an image result carries ECR coordinates and nothing from the lambda side",
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "image"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "repository",
+          "imageTag"
+        ],
+        "properties": {
+          "bucket": false,
+          "key": false,
+          "objectVersion": false
+        }
+      }
+    },
+    {
+      "$comment": "a lambda result carries S3 coordinates and nothing from the image side",
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "lambda"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "bucket",
+          "key",
+          "objectVersion"
+        ],
+        "properties": {
+          "repository": false,
+          "imageTag": false
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "artifactName": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9-_]+$",
+      "description": "Must match the manifest's key pattern in bergschacht"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version, matching the pattern the version manifest enforces."
+    }
+  }
+}

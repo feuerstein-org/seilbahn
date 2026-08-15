@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/master/seilbahn.schema.json",
+  "title": "seilbahn.toml",
+  "description": "The config file used everywhere to declare packages and artifacts for deployment",
+  "type": "object",
+  "required": [
+    "schema-version",
+    "packages"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema-version": {
+      "const": 1,
+      "description": "Version of this contract. Bumped when seilbahn makes a breaking change to the file format."
+    },
+    "defaults": {
+      "type": "object",
+      "description": "Values inherited by every package that does not set them itself.",
+      "additionalProperties": false,
+      "properties": {
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        }
+      }
+    },
+    "packages": {
+      "type": "object",
+      "description": "Every versioned, releasable unit in the repo. A package with no artifacts is a library: still change-detected, tagged and tested, but nothing is published from it.",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/packageName"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/package"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "`runtime` is required per package unless [defaults] supplies one.",
+      "if": {
+        "not": {
+          "required": [
+            "defaults"
+          ],
+          "properties": {
+            "defaults": {
+              "required": [
+                "runtime"
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "packages": {
+            "additionalProperties": {
+              "required": [
+                "runtime"
+              ],
+              "$comment": "no `runtime` and no [defaults] runtime to fall back on"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "packageName": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9._-]+$",
+      "minLength": 1,
+      "description": "Used as a release tag prefix (`<name>/v<version>`), so it is restricted to characters that are safe in a git ref."
+    },
+    "artifactName": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9-_]+$",
+      "minLength": 1,
+      "description": "Becomes a key in bergschacht's version manifest, whose schema allows no dots"
+    },
+    "runtime": {
+      "enum": [
+        "python",
+        "rust",
+        "node"
+      ],
+      "description": "Selects which manifest the package version is read from: python -> pyproject.toml (project.version), rust -> Cargo.toml (package.version), node -> package.json (version)."
+    },
+    "artifactType": {
+      "enum": [
+        "docker",
+        "lambda"
+      ],
+      "description": "docker publishes an image to ECR; lambda publishes a zip to S3."
+    },
+    "package": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo-relative package directory. \".\" for a single-package repo."
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "test": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the package will be run through test workflow."
+        },
+        "test-id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Argument passed to `mise run test-ci <id>`. Defaults to the package name."
+        },
+        "artifacts": {
+          "type": "object",
+          "description": "What this package publishes. The artifact name is the key bergschacht's CDK looks up in the version manifest, so renaming one is a breaking change.",
+          "propertyNames": {
+            "$ref": "#/$defs/artifactName"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/artifact"
+          }
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "description": "One flavor, or a list of both - the same artifact name published as an image *and* a zip under one manifest key.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/artifactType"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/artifactType"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          ]
+        },
+        "dockerfile": {
+          "type": "string",
+          "minLength": 1,
+          "default": "Dockerfile",
+          "description": "docker only. Package-relative, the build context is always the repo root."
+        },
+        "target": {
+          "type": "string",
+          "default": "",
+          "description": "docker only. Named multi-stage target. Omitted builds the final stage."
+        },
+        "build": {
+          "type": "string",
+          "minLength": 1,
+          "description": "lambda only, required. Shell command that fills `output-dir`. Runs under mise from the repo root."
+        },
+        "output-dir": {
+          "type": "string",
+          "minLength": 1,
+          "description": "lambda only. Repo-root-relative directory the `build` command populates. Defaults to dist/<artifact>."
+        },
+        "extra-files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "description": "lambda only. Package-relative paths copied into the zip, preserving their relative layout."
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "docker-only keys are invalid on an artifact that does not publish an image",
+          "if": {
+            "not": {
+              "$ref": "#/$defs/publishesDocker"
+            }
+          },
+          "then": {
+            "properties": {
+              "dockerfile": false,
+              "target": false
+            }
+          }
+        },
+        {
+          "$comment": "every lambda declares how its zip is filled - there is no built-in recipe - and the zip keys are invalid on an artifact that does not publish one",
+          "if": {
+            "$ref": "#/$defs/publishesLambda"
+          },
+          "then": {
+            "required": [
+              "build"
+            ]
+          },
+          "else": {
+            "properties": {
+              "build": false,
+              "output-dir": false,
+              "extra-files": false
+            }
+          }
+        }
+      ]
+    },
+    "publishesDocker": {
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "anyOf": [
+            {
+              "const": "docker"
+            },
+            {
+              "type": "array",
+              "contains": {
+                "const": "docker"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "publishesLambda": {
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "anyOf": [
+            {
+              "const": "lambda"
+            },
+            {
+              "type": "array",
+              "contains": {
+                "const": "lambda"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

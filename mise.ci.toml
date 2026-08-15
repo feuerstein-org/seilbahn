@@ -1,0 +1,25 @@
+# These tasks should only be used by GH actions
+
+[tools]
+python = "3.14"
+uv = "latest"
+pre-commit = "latest"
+
+[tasks.install-ci]
+description = "Install dependencies for CI"
+run = "uv sync --all-extras --dev"
+
+[tasks.pre-commit-ci]
+description = "Run pre-commit hooks (CI only)"
+run = "pre-commit run --all-files"
+
+[tasks.test-ci]
+description = "Run tests with coverage in CI"
+run = '''
+if [ ! -d "tests" ]; then
+    echo "No tests directory, skipping"
+    exit 0
+fi
+uv run coverage run -m pytest
+uv run coverage report --fail-under=80
+'''

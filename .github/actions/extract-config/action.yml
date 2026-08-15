@@ -1,43 +1,69 @@
-name: Extract workspace config
+name: Extract seilbahn config
 description: >
-  Read each workspace member's pyproject.toml and emit the artifacts of every
-  package whose release tag `name/vN` is missing (a new version) or points at the
-  checked-out HEAD (a redeploy). Uses `git ls-remote --tags` as the source of
-  truth, so detection is independent of how a push is shaped. Expects to run with
-  the consumer repo checked out at the current working directory.
+  Read the consumer repo's root `seilbahn.toml` and emit the matrices the deploy
+  and test pipelines fan out over. In `deploy` mode, artifacts are emitted for
+  every package whose release tag `name/vN` is missing (a new version), also supports
+  redeploy case.
 
 inputs:
+  mode:
+    description: >
+      `deploy` (default) emits artifacts/packages/has_changes.
+      `test` emits test_packages/has_tests and skips change detection entirely.
+    required: false
+    default: deploy
   redeploy-package-version:
     description: >
-      Rebuild-only redeploy. When set to a release tag `<package>/v<version>`,
-      skip tag-based change detection and emit every artifact of that package
-      (read from the currently checked-out source).
+      Rebuild-only redeploy (`deploy` mode only). When set to a release tag
+      `<package>/v<version>`, skip tag-based change detection and emit every
+      artifact of that package for redeployment in case it got deleted.
       Empty = normal change-driven behaviour.
     required: false
     default: ""
 
 outputs:
   artifacts:
-    description: JSON array of all changed artifacts.
+    description: JSON array of all changed artifacts (deploy mode).
     value: ${{ steps.run.outputs.artifacts }}
   docker_artifacts:
-    description: JSON array filtered to type=docker.
+    description: JSON array filtered to type=docker (deploy mode).
     value: ${{ steps.run.outputs.docker_artifacts }}
   lambda_artifacts:
-    description: JSON array filtered to type=lambda.
+    description: JSON array filtered to type=lambda (deploy mode).
     value: ${{ steps.run.outputs.lambda_artifacts }}
   packages:
-    description: JSON array of changed packages ({name, version, path}).
+    description: JSON array of changed packages ({name, version, path}) (deploy mode).
     value: ${{ steps.run.outputs.packages }}
   has_changes:
-    description: '"true" when at least one artifact changed, "false" otherwise.'
+    description: '"true" when at least one package changed, "false" otherwise (deploy mode).'
     value: ${{ steps.run.outputs.has_changes }}
+  test_packages:
+    description: JSON array of test ids for the test matrix (test mode).
+    value: ${{ steps.run.outputs.test_packages }}
+  has_tests:
+    description: '"true" when at least one package opts into the test matrix (test mode).'
+    value: ${{ steps.run.outputs.has_tests }}
 
 runs:
   using: composite
   steps:
+    - name: Validate seilbahn.toml against the schema
+      shell: bash
+      env:
+        SCHEMA: ${{ github.action_path }}/../../../seilbahn.schema.json
+      run: |
+        if [ ! -f seilbahn.toml ]; then
+          echo "::error::No seilbahn.toml at the repo root. Every seilbahn consumer must declare its packages and artifacts there - see the seilbahn README."
+          exit 1
+        fi
+        pipx run --spec 'check-jsonschema==0.33.0' check-jsonschema \
+          --schemafile "$SCHEMA" \
+          --force-filetype toml \
+          seilbahn.toml
+
     - id: run
       shell: bash
       env:
+        SEILBAHN_MODE: ${{ inputs.mode }}
         REDEPLOY_PACKAGE_VERSION: ${{ inputs.redeploy-package-version }}
       run: python3 "${{ github.action_path }}/extract_config.py"

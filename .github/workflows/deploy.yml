@@ -3,6 +3,8 @@ name: Deploy
 # Deploy pipeline for Feuerstein service repos. Callers invoke this
 # via `uses: feuerstein-org/seilbahn/.github/workflows/deploy.yml@v1.6.0 from
 # their own deploy workflow. See README.md for the caller template.
+#
+# What gets built is defined in `seilbahn.toml`
 on:
   workflow_call:
     # Repo vars (vars.X) are accessible from the reusable workflow against the
@@ -52,10 +54,11 @@ jobs:
           ref: ${{ inputs.redeploy_package_version }}
           fetch-depth: 1
 
-      - name: Extract version and config from workspace
+      - name: Extract packages and artifacts from seilbahn.toml
         id: config
         uses: feuerstein-org/seilbahn/.github/actions/extract-config@v1.6.0
         with:
+          mode: deploy
           redeploy-package-version: ${{ inputs.redeploy_package_version }}
 
   create-tags:
@@ -185,8 +188,9 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: ${{ matrix.artifact.package_path }}/${{ matrix.artifact.dockerfile || 'Dockerfile' }}
-          # Optional named multi-stage target; empty (undeclared) builds the final stage.
+          # `dockerfile` and `target` are resolved by extract-config, so there is no fallback expression here.
+          file: ${{ matrix.artifact.package_path }}/${{ matrix.artifact.dockerfile }}
+          # Optional named multi-stage target, empty (undeclared) builds the final stage.
           target: ${{ matrix.artifact.target }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -268,15 +272,12 @@ jobs:
             echo "Lambda package does not exist, will build"
           fi
 
-      - name: Set up Python for Lambda build
+      # Use a predefined mise task (set in seilbahn.toml) to build the Lambda zip
+      - name: Set up mise for Lambda build
         if: steps.check-lambda.outputs.exists != 'true'
-        uses: actions/setup-python@v6
+        uses: jdx/mise-action@v4
         with:
-          python-version: "3.14"
-
-      - name: Install uv
-        if: steps.check-lambda.outputs.exists != 'true'
-        uses: astral-sh/setup-uv@v7
+          cache: true
 
       - name: Generate token for private deps
         if: steps.check-lambda.outputs.exists != 'true'
@@ -293,40 +294,47 @@ jobs:
           GH_DEPS_TOKEN: ${{ steps.deps-token.outputs.token }}
         run: git config --global url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
 
-      - name: Build Lambda deployment package
+      - name: Build Lambda contents
+        if: steps.check-lambda.outputs.exists != 'true'
+        env:
+          BUILD_COMMAND: ${{ matrix.artifact.build }}
+          OUTPUT_DIR: ${{ matrix.artifact.output_dir }}
+        run: |
+          echo "Running declared build: $BUILD_COMMAND"
+          bash -c "$BUILD_COMMAND"
+
+          if [ ! -d "$OUTPUT_DIR" ] || [ -z "$(ls -A "$OUTPUT_DIR")" ]; then
+            echo "::error::build finished but output-dir '$OUTPUT_DIR' does not exist or is empty"
+            exit 1
+          fi
+
+          mkdir -p lambda_build
+          cp -a "$OUTPUT_DIR/." lambda_build/
+
+      - name: Bundle extra files and zip
         if: steps.check-lambda.outputs.exists != 'true'
         env:
           PACKAGE_PATH: ${{ matrix.artifact.package_path }}
-          # toJson(null) renders "null" when extra_files isn't declared; handled below.
+          # Always a JSON array (possibly empty) - extract-config resolves the default.
           EXTRA_FILES_JSON: ${{ toJson(matrix.artifact.extra_files) }}
         run: |
-          BUILD_DIR="lambda_build"
           ZIP_NAME="${{ matrix.artifact.name }}-${{ matrix.artifact.version }}.zip"
 
-          mkdir -p "$BUILD_DIR"
+          # Bundle any paths declared via `extra-files`, preserving their relative
+          # location so configs/foo.yaml lands at /var/task/configs/foo.yaml.
+          while IFS= read -r extra; do
+            src="$PACKAGE_PATH/$extra"
+            dest="lambda_build/$extra"
+            if [ ! -f "$src" ]; then
+              echo "::error::extra-files entry '$extra': $src not found"
+              exit 1
+            fi
+            mkdir -p "$(dirname "$dest")"
+            cp "$src" "$dest"
+            echo "Bundled extra file: $extra"
+          done < <(echo "$EXTRA_FILES_JSON" | jq -r '.[]')
 
-          uv pip install \
-            --target "$BUILD_DIR" \
-            --python python3.14 \
-            "./$PACKAGE_PATH"
-
-          # Bundle any extra files declared via [tool.bergschacht.artifacts.<name>].extra-files
-          # alongside the Python install.
-          if [ "$EXTRA_FILES_JSON" != "null" ]; then
-            while IFS= read -r extra; do
-              src="$PACKAGE_PATH/$extra"
-              dest="$BUILD_DIR/$extra"
-              if [ ! -f "$src" ]; then
-                echo "::error::extra-files entry '$extra': $src not found"
-                exit 1
-              fi
-              mkdir -p "$(dirname "$dest")"
-              cp "$src" "$dest"
-              echo "Bundled extra file: $extra"
-            done < <(echo "$EXTRA_FILES_JSON" | jq -r '.[]')
-          fi
-
-          cd "$BUILD_DIR"
+          cd lambda_build
           zip -r "../$ZIP_NAME" .
           cd ..
 
