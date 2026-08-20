@@ -81,6 +81,8 @@ On every push the deploy workflow runs **once, at the tip** of whatever was push
 
 > Note: If a push contains commits A (the version bump), B, C, the tag `<name>/v<N>` is created at **C** (the tip), because the build ships `tree-at-C` — including B's and C's changes — and the [redeploy path](#rebuilding-an-image-that-aged-out-of-ecr-redeploy) checks out the tag to reproduce that exact artifact. A version bump is the intent to release; the tag records the tree that was actually built.
 
+> If the **same package** is bumped twice across two commits that are pushed together - for example, A changes it to `v1.2.0` and B changes it to `v1.3.0` - the workflow still runs only once at B, sees only `v1.3.0`, and creates `<name>/v1.3.0` at B. The intermediate `v1.2.0` is not deployed or tagged. Push the commits separately if both versions must be released. Bumps to two different packages are handled together: each package's final version is deployed and tagged at the tip of the push.
+
 ## Rebuilding an image that aged out of ECR (redeploy)
 
 GitHub only offers **Re-run** for ~30 days after a run, and old images are pruned from ECR by lifecycle policy. When you need a past image back - e.g. to pull and troubleshoot it locally - use the redeploy input instead of re-running:
