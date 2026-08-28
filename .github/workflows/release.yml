@@ -69,7 +69,6 @@ jobs:
 
           if git diff --quiet; then
             echo "No ref changes required — workflows already pinned to $VERSION (or no internal refs found)."
-            echo "no_changes=true" >> "$GITHUB_OUTPUT"
           else
             echo "--- rewritten refs ---"
             git --no-pager diff
