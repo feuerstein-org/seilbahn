@@ -1,4 +1,5 @@
 name: Release
+run-name: Release ${{ inputs.version }} by @${{ github.actor }}
 
 # Cuts an immutable semver release of seilbahn.
 #
