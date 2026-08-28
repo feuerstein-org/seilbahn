@@ -9,7 +9,7 @@ name: Test
 # consumer repo's mise.ci.toml.
 #
 # Callers invoke this via:
-#   uses: feuerstein-org/seilbahn/.github/workflows/test.yml@v2.0.0
+#   uses: feuerstein-org/seilbahn/.github/workflows/test.yml@v2.1.0
 on:
   workflow_call:
 
@@ -54,7 +54,7 @@ jobs:
 
       - name: Read test matrix from seilbahn.toml
         id: config
-        uses: feuerstein-org/seilbahn/.github/actions/extract-config@v2.0.0
+        uses: feuerstein-org/seilbahn/.github/actions/extract-config@v2.1.0
         with:
           mode: test
 
