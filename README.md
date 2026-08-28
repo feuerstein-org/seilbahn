@@ -75,20 +75,35 @@ jobs:
 
 On every push the deploy workflow runs **once, at the tip** of whatever was pushed. `extract-config` decides which packages to (re)deploy by comparing each declared package's version `N` against the release tags on the remote (a single `git ls-remote --tags`):
 
-- **tag absent** -> a new, unreleased version -> deploy and create the tag.
+- **tag absent** -> a new, unreleased version -> deploy and create the tag (plus its [major/minor aliases](#version-tags-and-their-aliases)).
 - **tag points at HEAD** -> a re-run or redeploy of this exact commit -> deploy again; the tag / ECR / S3 content checks make the rebuilds idempotent.
 - **tag points at any other commit** -> `N` was already released elsewhere, so this is a no-op push -> skip.
 
 > Note: If a push contains commits A (the version bump), B, C, the tag `<name>/v<N>` is created at **C** (the tip), because the build ships `tree-at-C` — including B's and C's changes — and the [redeploy path](#rebuilding-an-image-that-aged-out-of-ecr-redeploy) checks out the tag to reproduce that exact artifact. A version bump is the intent to release; the tag records the tree that was actually built.
-
 > If the **same package** is bumped twice across two commits that are pushed together - for example, A changes it to `v1.2.0` and B changes it to `v1.3.0` - the workflow still runs only once at B, sees only `v1.3.0`, and creates `<name>/v1.3.0` at B. The intermediate `v1.2.0` is not deployed or tagged. Push the commits separately if both versions must be released. Bumps to two different packages are handled together: each package's final version is deployed and tagged at the tip of the push.
+
+## Version tags and their aliases
+
+Every release of a package produces three tags at the same commit:
+
+| Tag                    |  Moves? | Use it for                                                    |
+| ---------------------- |  ------ | ------------------------------------------------------------- |
+| `<name>/v1.4.2`        |  never  | Reproducible pins - redeploys, lockfiles.  |
+| `<name>/v1.4`          |  yes    | Following patch releases of one minor line.                    |
+| `<name>/v1`            |  yes    | Following everything in a major line.                          |
+
+```toml
+[tool.uv.sources]
+# always the latest 0.x of the library
+grundgeruest-telemetry-python = { git = "https://github.com/feuerstein-org/grundgeruest.git", subdirectory = "packages/grundgeruest-telemetry-python", tag = "grundgeruest-telemetry-python/v0" }
+```
 
 ## Rebuilding an image that aged out of ECR (redeploy)
 
 GitHub only offers **Re-run** for ~30 days after a run, and old images are pruned from ECR by lifecycle policy. When you need a past image back - e.g. to pull and troubleshoot it locally - use the redeploy input instead of re-running:
 
 1. In the consumer repo: **Actions -> Deploy -> Run workflow**.
-2. Set `redeploy_package_version` to that version's tag (created at release time as `<package>/v<version>`, e.g. `myservice/v1.4.2`).
+2. Set `redeploy_package_version` to that version's tag (created at release time as `<package>/v<version>`, e.g. `myservice/v1.4.2`). Pass the **exact** version here, not a `<package>/v1.4` or `<package>/v1` alias - the aliases move, so they would not reproduce a specific past artifact.
 
 This runs a **rebuild-only** path: it checks out that tag, parses the package name from it, and rebuilds **every** artifact declared by that package, pushing them to ECR/S3. It deliberately **skips** tag creation and the version manifest update (and thus the CDK deploy), so the live environment is untouched - the images simply reappear in ECR for you to pull. (Rebuilds are content-checked, so artifacts still present in ECR/S3 are skipped rather than rebuilt.)
 
@@ -196,7 +211,7 @@ artifacts.schmelzwerk = { type = "docker" }
 
 | Key              | Required | Default          | Meaning                                                                       |
 | ---------------- | -------- | ---------------- | ----------------------------------------------------------------------------- |
-| *(table key)*    | yes      | -                | The package name. Used as the release tag prefix `<name>/v<version>`.          |
+| *(table key)*    | yes      | -                | The package name. Used as the release tag prefix `<name>/v<version>` (see [Version tags](#version-tags-and-their-aliases)). |
 | `path`           | yes      | -                | Repo-relative package directory. `"."` for a single-package repo.             |
 | `runtime`        | yes*    | `defaults`       | `python`, `rust` or `node`. Selects where the version is read from.            |
 | `test`           | no       | `true`           | Whether the packages tests will be run bei seilbahn |
