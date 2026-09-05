@@ -4,7 +4,7 @@ run-name: Release ${{ inputs.version }} by @${{ github.actor }}
 # Cuts an immutable semver release of seilbahn.
 #
 # What it does:
-#   1. Rewrites every `uses: feuerstein-org/seilbahn/...@v2.1.0 reference in
+#   1. Rewrites every `uses: feuerstein-org/seilbahn/...@v2.1.1 reference in
 #      the workflow files to the new version, then commits + pushes that to
 #      master. master always reflects the latest release's pinned refs.
 #   2. Creates the immutable `vX.Y.Z` tag at that commit.
