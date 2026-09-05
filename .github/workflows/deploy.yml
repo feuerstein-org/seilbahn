@@ -10,9 +10,10 @@ on:
     # Repo vars (vars.X) are accessible from the reusable workflow against the
     # caller's repository context. Required from the caller:
     #   vars.CICD_ACCOUNT_ID, vars.AWS_REGION, vars.ECR_REPOSITORY_NAME,
-    #   vars.LAMBDA_S3_BUCKET_NAME, vars.CDK_REPO_OWNER, vars.CDK_REPO_NAME
+    #   vars.LAMBDA_S3_BUCKET_NAME, vars.CDK_REPO_OWNER, vars.CDK_REPO_NAME,
+    #   vars.DEPS_CLIENT_ID, vars.CDK_REPO_CLIENT_ID (`prod` environment)
     # Secrets (forward with `secrets: inherit` in the caller):
-    #   secrets.CDK_REPO_APP_ID, secrets.CDK_REPO_APP_PRIVATE_KEY
+    #   secrets.CDK_REPO_APP_PRIVATE_KEY, secrets.DEPS_APP_PRIVATE_KEY
     inputs:
       redeploy_package_version:
         description: >
@@ -214,7 +215,7 @@ jobs:
         id: deps-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.DEPS_APP_ID }}
+          client-id: ${{ vars.DEPS_CLIENT_ID }}
           private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
@@ -319,7 +320,7 @@ jobs:
         id: deps-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.DEPS_APP_ID }}
+          client-id: ${{ vars.DEPS_CLIENT_ID }}
           private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
@@ -444,7 +445,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.CDK_REPO_APP_ID }}
+          client-id: ${{ vars.CDK_REPO_CLIENT_ID }}
           private-key: ${{ secrets.CDK_REPO_APP_PRIVATE_KEY }}
           owner: ${{ vars.CDK_REPO_OWNER }}
           repositories: ${{ vars.CDK_REPO_NAME }}
