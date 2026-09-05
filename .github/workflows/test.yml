@@ -29,7 +29,7 @@ jobs:
         id: deps-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.DEPS_APP_ID }}
+          client-id: ${{ vars.DEPS_CLIENT_ID }}
           private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
@@ -78,7 +78,7 @@ jobs:
         id: deps-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.DEPS_APP_ID }}
+          client-id: ${{ vars.DEPS_CLIENT_ID }}
           private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 

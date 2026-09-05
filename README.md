@@ -123,15 +123,15 @@ Note that for image Lambdas which show an "The function is trying to use a delet
 | `LAMBDA_S3_BUCKET_NAME` | deploy   | S3 bucket Lambda artifacts                                     |
 | `CDK_REPO_OWNER`        | deploy   | GitHub owner of the CDK repo (normally `feuerstein-org`)    |
 | `CDK_REPO_NAME`         | deploy   | CDK repo name (noramlly `bergschacht`) |
+| `DEPS_CLIENT_ID`        | test, deploy | GitHub App **Client ID** for cloning private workspace-org repos pulled in via `[tool.uv.sources]` |
+| `CDK_REPO_CLIENT_ID`    | deploy   | GitHub App **Client ID** for committing manifest updates to the CDK repo. Set on the caller's `prod` environment |
 
 ### Secrets
 
 | Secret                     | Used by      | Purpose                                                                                  |
 | -------------------------- | ------------ | ---------------------------------------------------------------------------------------- |
-| `CDK_REPO_APP_ID`          | deploy       | GitHub App ID for committing manifest updates to the CDK repo (needs `contents: write`)  |
-| `CDK_REPO_APP_PRIVATE_KEY` | deploy       | GitHub App private key                                                                   |
-| `DEPS_APP_ID`              | test, deploy | GitHub App ID for cloning private workspace-org repos pulled in via `[tool.uv.sources]`  |
-| `DEPS_APP_PRIVATE_KEY`     | test, deploy | GitHub App private key for the same                                                      |
+| `CDK_REPO_APP_PRIVATE_KEY` | deploy       | GitHub App private key for committing manifest updates to the CDK repo (needs `contents: write`) |
+| `DEPS_APP_PRIVATE_KEY`     | test, deploy | GitHub App private key for cloning private workspace-org repos                           |
 
 Repository vars are inherited from the caller's context automatically. Secrets must be explicitly forwarded with `secrets: inherit` (or per-secret).
 
@@ -266,7 +266,7 @@ The version manifest lives as a git-committed file (`version-manifests/latest.js
 
 ### 1. The manifest-write token can write anything in the CDK repo
 
-`update-version-manifest` authenticates with a GitHub App installation token (`CDK_REPO_APP_ID` / `CDK_REPO_APP_PRIVATE_KEY`) scoped to the CDK repo with `contents: write`. GitHub App permissions are **per-repo, not per-path** - there is no way to grant "may write only `version-manifests/**`". So this token can commit arbitrary content **anywhere** in the CDK repo (all of the infrastructure-as-code, not just the manifest).
+`update-version-manifest` authenticates with a GitHub App installation token (`CDK_REPO_CLIENT_ID` / `CDK_REPO_APP_PRIVATE_KEY`) scoped to the CDK repo with `contents: write`. GitHub App permissions are **per-repo, not per-path** - there is no way to grant "may write only `version-manifests/**`". So this token can commit arbitrary content **anywhere** in the CDK repo (all of the infrastructure-as-code, not just the manifest).
 
 **Planned fix:** move the version manifests into their own dedicated repo and scope the token to that repo only, so the blast radius of a leaked token (or a compromised third-party action in the deploy job) is limited to manifest data rather than the deployable infrastructure.
 
