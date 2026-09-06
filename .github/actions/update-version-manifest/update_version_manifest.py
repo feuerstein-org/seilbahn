@@ -7,9 +7,9 @@ Reads deploy-result JSON files and commits the new artifact metadata to
 (no checkout, optimistic concurrency with retry on conflicting writes).
 This script runs inside the application repo's deploy workflow.
 
-Manifest entry shape (per artifact, under repositories.{repo}.{images|lambdas}.{name}):
+Manifest entry shape (under repositories.{repo}.packages.{package}.{images|lambdas}.{name}):
   {
-    "latest": {...},   # newest published artifact - what CDK synth resolves
+    "latest": {...},   # newest published artifact - CDK uses this unless pinned
     "pinned": {...}    # optional; deploys instead of latest when present
   }
 
@@ -42,6 +42,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from artifact_identity import MANIFEST_SCHEMA_VERSION, lambda_key, release_id, validate_name, validate_version
+
 JsonObject = dict[str, Any]
 
 REQUIRED_ENV = (
@@ -62,24 +65,18 @@ HTTP_CONFLICT = 409
 
 
 def parse_version(version: str) -> tuple[int, ...]:
-    """Parse a semantic version string into comparable tuple."""
-    version = version.lstrip("v")
+    """Parse a canonical MAJOR.MINOR.PATCH version into a comparable tuple."""
+    validate_version(version)
     return tuple(int(p) for p in version.split("."))
 
 
 def is_newer_version(new_version: str, current_version: str | None) -> bool:
     """Check if new_version is newer than current_version."""
+    new_parsed = parse_version(new_version)
     if current_version is None:
         return True
 
-    try:
-        new_parsed = parse_version(new_version)
-        current_parsed = parse_version(current_version)
-    except ValueError:
-        print(f"Warning: Could not parse versions ({new_version}, {current_version}), treating as older")
-        return False
-    else:
-        return new_parsed > current_parsed
+    return new_parsed > parse_version(current_version)
 
 
 def github_request(url: str, token: str, method: str = "GET", body: JsonObject | None = None) -> Any:
@@ -121,6 +118,51 @@ def build_artifact(artifact: JsonObject, commit_sha: str) -> tuple[str, JsonObje
     raise ValueError(msg)
 
 
+def validate_manifest_source(manifest: JsonObject, repo_name: str, source_repo: str) -> None:
+    """Check the manifest contract and ownership before recording any new results."""
+    if manifest.get("schemaVersion") != MANIFEST_SCHEMA_VERSION:
+        msg = f"Expected manifest schemaVersion {MANIFEST_SCHEMA_VERSION}"
+        raise ValueError(msg)
+    validate_name(repo_name, "Repository name")
+    owner, separator, source_name = source_repo.partition("/")
+    if not owner or not separator or source_name != repo_name:
+        msg = f"Source repository '{source_repo}' does not match repository key '{repo_name}'"
+        raise ValueError(msg)
+    repositories = manifest["repositories"]
+    if repo_name in repositories:
+        existing_source = repositories[repo_name]["source"]
+        if existing_source.casefold() != source_repo.casefold():
+            msg = f"Repository key '{repo_name}' already belongs to '{existing_source}', not '{source_repo}'"
+            raise ValueError(msg)
+
+
+def validate_updates(manifest: JsonObject, repo_name: str, source_repo: str, artifacts: list[JsonObject]) -> None:
+    """Reject ambiguous batches or incompatible manifests before mutating anything."""
+    validate_manifest_source(manifest, repo_name, source_repo)
+    seen: set[tuple[str, str, str]] = set()
+    for artifact in artifacts:
+        package = artifact["package"]
+        name = artifact["name"]
+        identity = (package, artifact["type"], name)
+        if identity in seen:
+            msg = f"Duplicate deploy result for {repo_name}/{package}/{artifact['type']}/{name}"
+            raise ValueError(msg)
+        seen.add(identity)
+        expected_tag = release_id(repo_name, package, name, artifact["version"])
+        if artifact["type"] == "image":
+            if artifact["imageTag"] != expected_tag:
+                msg = f"Image tag for {repo_name}/{package}/{name} must be '{expected_tag}'"
+                raise ValueError(msg)
+        elif artifact["type"] == "lambda":
+            expected_key = lambda_key(repo_name, package, name, artifact["version"])
+            if artifact["key"] != expected_key:
+                msg = f"Lambda key for {repo_name}/{package}/{name} must be '{expected_key}'"
+                raise ValueError(msg)
+        else:
+            msg = f"Unknown artifact type '{artifact['type']}'"
+            raise ValueError(msg)
+
+
 def apply_updates(
     manifest: JsonObject,
     repo_name: str,
@@ -129,73 +171,79 @@ def apply_updates(
     artifacts: list[JsonObject],
 ) -> tuple[bool, bool, list[str]]:
     """
-    Record freshly deployed artifacts in the version manifest, mutating it in place.
+    Record published artifacts in the version manifest, mutating it in place.
 
     For each artifact, the matching manifest entry's `latest` pointer is moved to
-    the new deployed version, but only when that version is strictly newer than the
+    the new published version, but only when that version is strictly newer than the
     version already recorded (see `is_newer_version`); older or equal versions are
-    skipped and leave the manifest untouched. Missing `repositories`, repo, kind,
-    and entry containers are created as needed, and the repo entry's `source` is
-    backfilled from `source_repo` if absent.
+    skipped and leave the manifest untouched. New repositories, packages and artifacts
+    are registered as needed. Existing entries must have the required fields from
+    the current manifest schema.
 
-    A `latest` pointer is purely a record of the newest known build. Whether that
-    build actually deploys depends on `pinned`: if an entry is pinned, `latest`
-    still advances but the pinned version is what deploys, so `latest` can move
-    forward without changing anything that runs.
+    Artifacts are already available in ECR/S3 before this function runs. `latest`
+    records the newest published build even while pinned. CDK resolves `pinned`
+    before `latest`, so advancing a pinned entry does not change the artifact
+    selected by this manifest. Removing the pin selects the recorded `latest`.
 
     Args:
         manifest: The manifest dict to update in place.
         repo_name: Key identifying this repo's entry within `repositories`.
-        source_repo: Source repository, stored as the entry's `source` if not set.
+        source_repo: Source repository, stored when registering a new repository.
         commit_sha: Commit the artifacts were built from, embedded in each payload.
         artifacts: Deploy results to apply; each is normalized via `build_artifact`.
 
     Returns:
-        A tuple `(deploy_changed, manifest_changed, updated_labels)`:
-          - deploy_changed: True if at least one unpinned entry advanced, i.e. what
-            actually deploys moved. Pinned advances do not set this.
+        A tuple `(resolved_changed, manifest_changed, updated_labels)`:
+          - resolved_changed: True if at least one unpinned entry advanced, changing
+            what this manifest selects for CDK. This does not report publication
+            or deployment success. Pinned advances do not set this.
           - manifest_changed: True if any `latest` pointer advanced (also happens if pinned),
             i.e. new manifest needs to be committed.
-          - updated_labels: `"{name}@{version}"` strings for the unpinned entries
+          - updated_labels: `"{package}/{kind}/{name}@{version}"` strings for the unpinned entries
             that advanced, suitable for logging or a commit/PR summary. Pinned
             advances and skipped artifacts are excluded.
 
     """
-    repo_entry = manifest.setdefault("repositories", {}).setdefault(repo_name, {})
-    repo_entry.setdefault("source", source_repo)
+    validate_updates(manifest, repo_name, source_repo, artifacts)
+    repo_entry = manifest["repositories"].setdefault(repo_name, {"source": source_repo, "packages": {}})
 
-    deploy_changed = False
+    resolved_changed = False
     manifest_changed = False
     updated_labels: list[str] = []
 
     for artifact in artifacts:
+        package = artifact["package"]
         name = artifact["name"]
         kind, payload = build_artifact(artifact, commit_sha)
         version = payload["version"]
 
-        entry = repo_entry.setdefault(kind, {}).setdefault(name, {})
-        current = entry.get("latest", {}).get("version")
+        package_entry = repo_entry["packages"].setdefault(package, {})
+        entries = package_entry.setdefault(kind, {})
+        entry = entries.get(name)
+        current = entry["latest"]["version"] if entry is not None else None
 
         if not is_newer_version(version, current):
             print(
-                f"Skipping {repo_name}/{kind}/{name}: deployed version {version} "
+                f"Skipping manifest update for {repo_name}/{package}/{kind}/{name}: published version {version} "
                 f"is not newer than manifest latest {current}"
             )
             continue
 
+        if entry is None:
+            entry = entries[name] = {}
         entry["latest"] = payload
         manifest_changed = True
         if entry.get("pinned"):
             print(
-                f"{repo_name}/{kind}/{name} is pinned at {entry['pinned'].get('version')}: "
-                f"advancing latest to {version} without deploying it"
+                f"{repo_name}/{package}/{kind}/{name}: recording published version {version} as latest; "
+                f"this manifest still selects pinned version {entry['pinned']['version']}"
             )
         else:
-            deploy_changed = True
-            updated_labels.append(f"{name}@{version}")
-            print(f"Updated {repo_name}/{kind}/{name} to {version}")
+            resolved_changed = True
+            updated_labels.append(f"{package}/{kind}/{name}@{version}")
+            print(f"{repo_name}/{package}/{kind}/{name}: this manifest now selects published version {version}")
 
-    return deploy_changed, manifest_changed, updated_labels
+    return resolved_changed, manifest_changed, updated_labels
 
 
 def commit_manifest(env: dict[str, str], artifacts: list[JsonObject]) -> tuple[bool, bool]:
@@ -205,7 +253,7 @@ def commit_manifest(env: dict[str, str], artifacts: list[JsonObject]) -> tuple[b
     The read-modify-write is optimistic, a conflicting write from another repo's
     deploy is retried from a fresh read.
 
-    Returns `(ok, deploy_changed)`.
+    Returns `(ok, resolved_changed)`.
     """
     contents_url = f"{API_ROOT}/repos/{env['MANIFEST_REPO']}/contents/{env['MANIFEST_PATH']}"
     token = env["GITHUB_TOKEN"]
@@ -214,13 +262,13 @@ def commit_manifest(env: dict[str, str], artifacts: list[JsonObject]) -> tuple[b
         current = github_request(f"{contents_url}?ref={env['MANIFEST_BRANCH']}", token)
         manifest = json.loads(base64.b64decode(current["content"]))
 
-        deploy_changed, manifest_changed, updated_labels = apply_updates(
+        resolved_changed, manifest_changed, updated_labels = apply_updates(
             manifest, env["REPO_NAME"], env["SOURCE_REPO"], env["COMMIT_SHA"], artifacts
         )
 
         if not manifest_changed:
             print("No manifest changes (all versions are current or older)")
-            return True, deploy_changed
+            return True, resolved_changed
 
         message = (
             f"chore: update {env['REPO_NAME']} artifacts ({', '.join(updated_labels)})"
@@ -244,10 +292,10 @@ def commit_manifest(env: dict[str, str], artifacts: list[JsonObject]) -> tuple[b
                 time.sleep(attempt * 2)
                 continue
             print(f"Error: manifest update failed with HTTP {error.code}: {error.read().decode()}")
-            return False, deploy_changed
+            return False, resolved_changed
 
         print(f"Committed manifest update: {result['commit']['sha']}")
-        return True, deploy_changed
+        return True, resolved_changed
 
     print(f"Failed to commit manifest update after {MAX_ATTEMPTS} attempts")
     return False, False
@@ -255,7 +303,7 @@ def commit_manifest(env: dict[str, str], artifacts: list[JsonObject]) -> tuple[b
 
 def main() -> int:
     """Commit deploy results to the CDK repo's version manifest."""
-    parser = argparse.ArgumentParser(description="Update the committed version manifest after artifact deployment")
+    parser = argparse.ArgumentParser(description="Update the committed version manifest after artifact publication")
     parser.add_argument("--results-dir", required=True, help="Directory containing result JSON files")
     args = parser.parse_args()
 
@@ -284,14 +332,18 @@ def main() -> int:
 
     artifacts: list[JsonObject] = [json.loads(f.read_text()) for f in result_files]
 
-    ok, deploy_changed = commit_manifest(env, artifacts)
+    try:
+        ok, resolved_changed = commit_manifest(env, artifacts)
+    except ValueError as error:
+        print(f"Error: {error}")
+        return 1
     if not ok:
         return 1
 
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
         with Path(github_output).open("a") as f:
-            f.write(f"updated={'true' if deploy_changed else 'false'}\n")
+            f.write(f"updated={'true' if resolved_changed else 'false'}\n")
 
     return 0
 

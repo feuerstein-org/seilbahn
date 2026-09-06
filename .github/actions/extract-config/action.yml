@@ -65,5 +65,6 @@ runs:
       shell: bash
       env:
         SEILBAHN_MODE: ${{ inputs.mode }}
+        REPO_NAME: ${{ github.event.repository.name }}
         REDEPLOY_PACKAGE_VERSION: ${{ inputs.redeploy-package-version }}
       run: python3 "${{ github.action_path }}/extract_config.py"

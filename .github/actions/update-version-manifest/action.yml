@@ -37,7 +37,8 @@ inputs:
 
 outputs:
   updated:
-    description: '"true" if any deployed version changed (a deploy will follow), "false" otherwise.'
+    description: >
+      "true" if an unpinned entry advanced, changing what this manifest selects for CDK, "false" otherwise.
     value: ${{ steps.run.outputs.updated }}
 
 runs:

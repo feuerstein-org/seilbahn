@@ -79,6 +79,9 @@ lint.unfixable = []
 ]
 
 [tool.pyright]
+extraPaths = [".github/actions"]
+venvPath = "."
+venv = ".venv"
 include = [".github/actions", "tests"]
 # Pyright's default exclude is `**/.*`, which excludes all of .github
 exclude = ["**/node_modules", "**/__pycache__", "**/.venv", "**/.git"]

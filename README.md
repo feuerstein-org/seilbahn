@@ -16,7 +16,7 @@ Shared GitHub Actions reusable workflows and CI scripts for Feuerstein service r
       extract_config.py                     # reads the consumer's seilbahn.toml, emits the deploy/test matrices
     update-version-manifest/
       action.yml
-      update_version_manifest.py            # commits artifact metadata to the CDK repo's manifest after a deploy
+      update_version_manifest.py            # commits published artifact metadata to the CDK repo's manifest
 ```
 
 Everything the pipeline builds is declared in the **consumer repo's root `seilbahn.toml`**. seilbahn itself is runtime-agnostic: Python, Rust, TypeScript repos and anything else that can produce a Docker image or a zip go through the same path. See [The `seilbahn.toml` contract](#the-seilbahntoml-contract).
@@ -81,6 +81,7 @@ On every push the deploy workflow runs **once, at the tip** of whatever was push
 
 > Note: If a push contains commits A (the version bump), B, C, the tag `<name>/v<N>` is created at **C** (the tip), because the build ships `tree-at-C` — including B's and C's changes — and the [redeploy path](#rebuilding-an-image-that-aged-out-of-ecr-redeploy) checks out the tag to reproduce that exact artifact. A version bump is the intent to release; the tag records the tree that was actually built.
 > If the **same package** is bumped twice across two commits that are pushed together - for example, A changes it to `v1.2.0` and B changes it to `v1.3.0` - the workflow still runs only once at B, sees only `v1.3.0`, and creates `<name>/v1.3.0` at B. The intermediate `v1.2.0` is not deployed or tagged. Push the commits separately if both versions must be released. Bumps to two different packages are handled together: each package's final version is deployed and tagged at the tip of the push.
+> A pin in the version manifest doesn't block the artifact from being published, the `latest` property will still advance but whatever reads the manifest will always pick the pinned version.
 
 ## Version tags and their aliases
 
@@ -105,7 +106,7 @@ GitHub only offers **Re-run** for ~30 days after a run, and old images are prune
 1. In the consumer repo: **Actions -> Deploy -> Run workflow**.
 2. Set `redeploy_package_version` to that version's tag (created at release time as `<package>/v<version>`, e.g. `myservice/v1.4.2`). Pass the **exact** version here, not a `<package>/v1.4` or `<package>/v1` alias - the aliases move, so they would not reproduce a specific past artifact.
 
-This runs a **rebuild-only** path: it checks out that tag, parses the package name from it, and rebuilds **every** artifact declared by that package, pushing them to ECR/S3. It deliberately **skips** tag creation and the version manifest update (and thus the CDK deploy), so the live environment is untouched - the images simply reappear in ECR for you to pull. (Rebuilds are content-checked, so artifacts still present in ECR/S3 are skipped rather than rebuilt.)
+This runs a **rebuild-only** path: it checks out that tag, parses the package name from it, and rebuilds **every** artifact declared by that package, pushing them to ECR/S3. It deliberately **skips** tag creation and the version manifest update (and thus the CDK deploy), so the live environment is untouched - the images simply reappear in ECR for you to pull. (Rebuilds check whether the exact tag/key exists, so artifacts still present in ECR/S3 are skipped rather than rebuilt.)
 
 Note that for image Lambdas which show an "The function is trying to use a deleted image." error you need to manually update the Lambda config to point to essentially the same image (via tag). The reason is that the Lambda resolves the actual sha hash on deployment and a redeployed image doesn't guarantee the same has value to be produced (build time differences, base image changed etc.).
 
@@ -166,8 +167,8 @@ The deploy workflow assumes an IAM role named `${repo}-prod-github-actions-role`
 A single `seilbahn.toml` at the **repo root** is the only file seilbahn reads for structure. It declares every package that gets versioned and released, and every artifact each one publishes. Seilbahn will make sure the TOML syntax is correct on every Action run.
 
 ```toml
-#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/master/seilbahn.schema.json
-schema-version = 1
+#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/v2/seilbahn.schema.json
+schema-version = 2
 
 [defaults]
 runtime = "python"          # applied to any package that doesn't set its own
@@ -184,8 +185,8 @@ path = "packages/ingestion-core"
 A single-crate Rust repo, in full:
 
 ```toml
-#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/master/seilbahn.schema.json
-schema-version = 1
+#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/v2/seilbahn.schema.json
+schema-version = 2
 
 [packages.schmelzwerk]
 path = "."
@@ -204,8 +205,18 @@ artifacts.schmelzwerk = { type = "docker" }
       files: ^seilbahn\.toml$
       args:
         - --force-filetype=toml
-        - --schemafile=https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/master/seilbahn.schema.json
+        - --schemafile=https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/v2/seilbahn.schema.json
 ```
+
+### Artifact identity and naming
+
+An artifact is identified by **repository, package, artifact name and type**.
+
+| Destination | Generated name |
+| --- | --- |
+| Docker tag in the existing shared ECR repository | `<repo>.<package>.<artifact>.<version>` |
+| Lambda key in the existing shared S3 bucket | `<repo>/<package>.<artifact>.<version>.zip` |
+| Manifest entry | `repositories[repo].packages[package].images[artifact]` or `.lambdas[artifact]` |
 
 ### Package keys
 
@@ -280,7 +291,7 @@ Consumers can pin to:
 
 - `@v2` - floating major, gets all 2.x patches and minor additions.
 - `@v2.1` - floating minor, gets 2.1.x patches only.
-- `@v2.1.0` - immutable never moves.
+- `@v2.1.2` - immutable, never moves. Older exact tags retain their original schema contract.
 
 `master` is the release branch - it always reflects the most recent release, with internal `uses: feuerstein-org/seilbahn/...@<ref>` lines pinned to the latest `vX.Y.Z`. Day-to-day edits to the composite action source (e.g. `extract_config.py`) land directly on `master`; edits to the workflow YAML files should go via a feature branch + PR so the release workflow's rewrite step has a known starting state.
 
@@ -288,11 +299,11 @@ The release workflow pushes commits that modify files under `.github/workflows/`
 
 App id and key are set as secrets on the `release` environment and can only be accessed by the master branch.
 
-To cut a release, run the [`Release workflow`](.github/workflows/release.yml) via **Actions -> Release -> Run workflow**, passing the new semver tag (e.g. `v2.1.0`). The workflow:
+To cut a release, run the [`Release workflow`](.github/workflows/release.yml) via **Actions -> Release -> Run workflow**, passing a new, unused v2 semver tag (e.g. `v2.2.0`). The workflow:
 
 1. Validates the version and refuses to overwrite an existing tag.
-2. Rewrites every `uses: feuerstein-org/seilbahn/...@<ref>` in `.github/workflows/*.yml` to `@v2.1.0`.
+2. Rewrites every `uses: feuerstein-org/seilbahn/...@<ref>` in `.github/workflows/*.yml` to the supplied version.
 3. Commits and pushes that to `master`.
-4. Creates `v2.1.0`, force-moves `v2.1` and `v2` to that commit, pushes all three tags.
+4. Creates that immutable tag and advances its minor and major aliases (e.g. `v2.2` and `v2`) to the same commit.
 
 > TODO: Appropriate pytest tests to be added.
