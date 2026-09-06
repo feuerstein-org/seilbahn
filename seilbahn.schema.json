@@ -11,7 +11,7 @@
   "additionalProperties": false,
   "properties": {
     "schema-version": {
-      "const": 1,
+      "const": 2,
       "description": "Version of this contract. Bumped when seilbahn makes a breaking change to the file format."
     },
     "defaults": {
@@ -70,15 +70,15 @@
   "$defs": {
     "packageName": {
       "type": "string",
-      "pattern": "^[a-zA-Z0-9._-]+$",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]*$",
       "minLength": 1,
-      "description": "Used as a release tag prefix (`<name>/v<version>`), so it is restricted to characters that are safe in a git ref."
+      "description": "Letters, digits, underscores and hyphens; must not start with a hyphen. Dots are reserved for artifact identity separators."
     },
     "artifactName": {
       "type": "string",
-      "pattern": "^[a-zA-Z0-9-_]+$",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]*$",
       "minLength": 1,
-      "description": "Becomes a key in bergschacht's version manifest, whose schema allows no dots"
+      "description": "Letters, digits, underscores and hyphens; must not start with a hyphen. Dots are reserved for artifact identity separators."
     },
     "runtime": {
       "enum": [
@@ -122,7 +122,7 @@
         },
         "artifacts": {
           "type": "object",
-          "description": "What this package publishes. The artifact name is the key bergschacht's CDK looks up in the version manifest, so renaming one is a breaking change.",
+          "description": "Package-scoped artifacts. Repository, package, artifact and type identify the manifest entry, renaming either package or artifact changes its identity.",
           "propertyNames": {
             "$ref": "#/$defs/artifactName"
           },

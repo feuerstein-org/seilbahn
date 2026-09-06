@@ -142,7 +142,7 @@ jobs:
           done
 
   deploy-docker-artifacts:
-    name: Deploy Docker image ${{ matrix.artifact.name }}
+    name: Publish Docker image ${{ matrix.artifact.artifact_id }}
     runs-on: ubuntu-latest
     needs: [extract-config, create-tags]
     # always() + explicit result checks so the job still runs when create-tags is
@@ -171,7 +171,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::${{ vars.CICD_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
           aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: GitHubActions-${{ matrix.artifact.name }}-${{ github.run_id }}
+          role-session-name: GitHubActions-${{ github.run_id }}-${{ strategy.job-index }}
 
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -179,22 +179,24 @@ jobs:
       - name: Generate image tag
         id: docker-tag
         run: |
-          IMAGE_TAG="${{ env.REPO_NAME }}-${{ matrix.artifact.name }}-${{ matrix.artifact.version }}"
+          IMAGE_TAG="${{ matrix.artifact.image_tag }}"
           echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Check if image already exists
         id: check-image
-        continue-on-error: true
         run: |
           if aws ecr describe-images \
             --repository-name ${{ vars.ECR_REPOSITORY_NAME }} \
             --image-ids imageTag="${{ steps.docker-tag.outputs.image_tag }}" \
-            --region ${{ vars.AWS_REGION }} > /dev/null 2>&1; then
+            --region ${{ vars.AWS_REGION }} > /dev/null 2> ecr-lookup-error.txt; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "Image already exists in ECR, skipping build"
-          else
+          elif grep -q '(ImageNotFoundException)' ecr-lookup-error.txt; then
             echo "exists=false" >> $GITHUB_OUTPUT
             echo "Image does not exist, will build"
+          else
+            cat ecr-lookup-error.txt >&2
+            exit 1
           fi
 
       - name: Set up Docker Buildx
@@ -229,12 +231,12 @@ jobs:
           # Optional named multi-stage target, empty (undeclared) builds the final stage.
           target: ${{ matrix.artifact.target }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.ECR_REPOSITORY }}:${{ matrix.artifact.image_tag }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           provenance: false
-          cache-from: type=gha,scope=${{ matrix.artifact.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.artifact.name }}
+          cache-from: type=gha,scope=${{ matrix.artifact.artifact_id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.artifact.artifact_id }}
           secrets: |
             gh_deps_token=${{ steps.deps-token.outputs.token }}
 
@@ -243,21 +245,22 @@ jobs:
           mkdir -p deploy-results
           jq -nc \
             --arg name "${{ matrix.artifact.name }}" \
+            --arg package "${{ matrix.artifact.package_name }}" \
             --arg type "image" \
             --arg version "${{ matrix.artifact.version }}" \
             --arg repository "${{ env.ECR_REPOSITORY }}" \
             --arg imageTag "${{ steps.docker-tag.outputs.image_tag }}" \
-            '{name: $name, type: $type, version: $version, repository: $repository, imageTag: $imageTag}' \
-            > deploy-results/${{ matrix.artifact.name }}-docker.json
+            '{package: $package, name: $name, type: $type, version: $version, repository: $repository, imageTag: $imageTag}' \
+            > deploy-results/${{ matrix.artifact.artifact_id }}.docker.json
 
       - name: Upload deploy result
         uses: actions/upload-artifact@v7
         with:
-          name: deploy-result-${{ matrix.artifact.name }}-docker
-          path: deploy-results/${{ matrix.artifact.name }}-docker.json
+          name: deploy-result-${{ matrix.artifact.artifact_id }}.docker
+          path: deploy-results/${{ matrix.artifact.artifact_id }}.docker.json
 
   deploy-lambda-artifacts:
-    name: Deploy Lambda ${{ matrix.artifact.name }}
+    name: Publish Lambda ZIP ${{ matrix.artifact.artifact_id }}
     runs-on: ubuntu-latest
     needs: [extract-config, create-tags]
     # always() + explicit result checks so the job still runs when create-tags is
@@ -286,26 +289,28 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::${{ vars.CICD_ACCOUNT_ID }}:role/${{ env.ROLE_NAME }}
           aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: GitHubActions-${{ matrix.artifact.name }}-${{ github.run_id }}
+          role-session-name: GitHubActions-${{ github.run_id }}-${{ strategy.job-index }}
 
       - name: Generate S3 key
         id: s3-key
         run: |
-          S3_KEY="${{ env.REPO_NAME }}/${{ matrix.artifact.name }}-${{ matrix.artifact.version }}.zip"
+          S3_KEY="${{ matrix.artifact.s3_key }}"
           echo "s3_key=$S3_KEY" >> $GITHUB_OUTPUT
 
       - name: Check if Lambda package already exists
         id: check-lambda
-        continue-on-error: true
         run: |
           if aws s3api head-object \
             --bucket ${{ env.LAMBDA_S3_BUCKET_NAME }} \
-            --key "${{ steps.s3-key.outputs.s3_key }}" > /dev/null 2>&1; then
+            --key "${{ steps.s3-key.outputs.s3_key }}" > /dev/null 2> s3-lookup-error.txt; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "Lambda package already exists, skipping build"
-          else
+          elif grep -q '(404)' s3-lookup-error.txt; then
             echo "exists=false" >> $GITHUB_OUTPUT
             echo "Lambda package does not exist, will build"
+          else
+            cat s3-lookup-error.txt >&2
+            exit 1
           fi
 
       # Use a predefined mise task (set in seilbahn.toml) to build the Lambda zip
@@ -354,7 +359,7 @@ jobs:
           # Always a JSON array (possibly empty) - extract-config resolves the default.
           EXTRA_FILES_JSON: ${{ toJson(matrix.artifact.extra_files) }}
         run: |
-          ZIP_NAME="${{ matrix.artifact.name }}-${{ matrix.artifact.version }}.zip"
+          ZIP_NAME="${{ matrix.artifact.artifact_id }}.${{ matrix.artifact.version }}.zip"
 
           # Bundle any paths declared via `extra-files`, preserving their relative
           # location so configs/foo.yaml lands at /var/task/configs/foo.yaml.
@@ -381,7 +386,7 @@ jobs:
         if: steps.check-lambda.outputs.exists != 'true'
         run: |
           aws s3 cp \
-            "${{ matrix.artifact.name }}-${{ matrix.artifact.version }}.zip" \
+            "${{ matrix.artifact.artifact_id }}.${{ matrix.artifact.version }}.zip" \
             "s3://${{ env.LAMBDA_S3_BUCKET_NAME }}/${{ steps.s3-key.outputs.s3_key }}"
 
           echo "Uploaded to s3://${{ env.LAMBDA_S3_BUCKET_NAME }}/${{ steps.s3-key.outputs.s3_key }}"
@@ -402,22 +407,24 @@ jobs:
           mkdir -p deploy-results
           jq -nc \
             --arg name "${{ matrix.artifact.name }}" \
+            --arg package "${{ matrix.artifact.package_name }}" \
             --arg type "lambda" \
             --arg version "${{ matrix.artifact.version }}" \
             --arg bucket "${{ env.LAMBDA_S3_BUCKET_NAME }}" \
             --arg key "${{ steps.s3-key.outputs.s3_key }}" \
             --arg objectVersion "${{ steps.object-version.outputs.object_version }}" \
-            '{name: $name, type: $type, version: $version, bucket: $bucket, key: $key, objectVersion: $objectVersion}' \
-            > deploy-results/${{ matrix.artifact.name }}-lambda.json
+            '{package: $package, name: $name, type: $type, version: $version, bucket: $bucket, key: $key, objectVersion: $objectVersion}' \
+            > deploy-results/${{ matrix.artifact.artifact_id }}.lambda.json
 
       - name: Upload deploy result
         uses: actions/upload-artifact@v7
         with:
-          name: deploy-result-${{ matrix.artifact.name }}-lambda
-          path: deploy-results/${{ matrix.artifact.name }}-lambda.json
+          name: deploy-result-${{ matrix.artifact.artifact_id }}.lambda
+          path: deploy-results/${{ matrix.artifact.artifact_id }}.lambda.json
 
   update-manifest:
     runs-on: ubuntu-latest
+    # Publication completes before manifest selection. Pins never gate ECR/S3 uploads.
     needs: [extract-config, deploy-docker-artifacts, deploy-lambda-artifacts]
     # inputs.redeploy_package_version == '' skips the manifest update in rebuild-only
     # redeploy mode - the images are put back in ECR without moving the live version.

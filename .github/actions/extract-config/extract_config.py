@@ -43,6 +43,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, NoReturn, override
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from artifact_identity import lambda_key, release_id, validate_name, validate_version
+
 # Parsed TOML. The values are `Any` deliberately: seilbahn.schema.json has already validated in CI
 TomlTable = dict[str, Any]
 
@@ -73,12 +76,19 @@ class Artifact:
 
     type: ClassVar[str]
 
-    def matrix_entry(self, package: Package) -> MatrixEntry:
+    def matrix_entry(self, package: Package, repo_name: str) -> MatrixEntry:
         """Flatten this artifact and its package into one deploy-matrix entry."""
         return {
             "name": self.name,
             "type": self.type,
+            "package_name": package.name,
+            "artifact_id": f"{package.name}.{self.name}",
             "version": package.version,
+            **(
+                {"image_tag": release_id(repo_name, package.name, self.name, package.version)}
+                if self.type == "docker"
+                else {"s3_key": lambda_key(repo_name, package.name, self.name, package.version)}
+            ),
             "package_path": package.path,
             "runtime": package.runtime,
             **self.build_fields(),
@@ -218,8 +228,10 @@ def parse_packages(config: TomlTable) -> list[Package]:
 
     packages: list[Package] = []
     for name, package in config["packages"].items():
+        validate_name(name, "Package name")
         artifacts: list[Artifact] = []
         for artifact_name, artifact_table in package.get("artifacts", {}).items():
+            validate_name(artifact_name, "Artifact name")
             artifacts.extend(parse_artifact(artifact_name, artifact_table))
 
         packages.append(
@@ -265,6 +277,7 @@ def resolve_version(root: Path, package: Package) -> str:
     if not isinstance(version, str):
         msg = f"{where}: no string at `{version_key}` in {package.path}/{version_file}"
         raise ConfigError(msg)
+    validate_version(version)
     return version
 
 
@@ -276,12 +289,15 @@ def load_packages(root: Path) -> list[Package]:
         fail([str(error)])
 
     errors: list[str] = []
-    packages = parse_packages(config)
+    try:
+        packages = parse_packages(config)
+    except ValueError as error:
+        fail([str(error)])
 
     for package in packages:
         try:
             package.version = resolve_version(root, package)
-        except ConfigError as error:
+        except (ConfigError, ValueError) as error:
             errors.append(str(error))
 
     if errors:
@@ -308,16 +324,12 @@ def get_released_tags(remote: str = "origin") -> dict[str, str]:
     A single `git ls-remote --tags` call is the source of truth for "which
     versions have been released".
     """
-    try:
-        result = subprocess.run(  # noqa: S603
-            ["git", "ls-remote", "--tags", remote],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError:
-        # No remote / no tags - treat everything as unreleased.
-        return {}
+    result = subprocess.run(  # noqa: S603
+        ["git", "ls-remote", "--tags", remote],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=True,
+    )
 
     tags: dict[str, str] = {}
     prefix = "refs/tags/"
@@ -338,6 +350,7 @@ def collect_changed_artifacts(
     packages: list[Package],
     released_tags: dict[str, str],
     head_sha: str,
+    repo_name: str,
 ) -> tuple[list[MatrixEntry], list[dict[str, str]]]:
     """
     Normal path: emit artifacts for every package that still needs releasing.
@@ -373,7 +386,7 @@ def collect_changed_artifacts(
             print("    (no artifacts declared - tagging only)")
             continue
 
-        all_artifacts.extend(artifact.matrix_entry(package) for artifact in package.artifacts)
+        all_artifacts.extend(artifact.matrix_entry(package, repo_name) for artifact in package.artifacts)
 
     return all_artifacts, changed_packages
 
@@ -381,24 +394,31 @@ def collect_changed_artifacts(
 def collect_redeploy_package_version(
     packages: list[Package],
     redeploy_package_version: str,
+    repo_name: str,
 ) -> tuple[list[MatrixEntry], list[dict[str, str]]]:
     """Redeploy path: rebuild every artifact of the package named by a release tag."""
     # Tags are `f"{name}/v{version}"` and versions never contain "/v", so the
     # package name is everything left of the final "/v".
-    package_name, sep, _ = redeploy_package_version.rpartition("/v")
+    package_name, sep, version = redeploy_package_version.rpartition("/v")
     if not sep:
         fail([f"Redeploy tag '{redeploy_package_version}' is not of the form '<package>/v<version>'"])
+    try:
+        validate_version(version)
+    except ValueError as error:
+        fail([str(error)])
 
     for package in packages:
         if package.name != package_name:
             continue
+        if package.version != version:
+            fail([f"Redeploy tag version {version} does not match {package.name}'s declared version {package.version}"])
 
         if not package.artifacts:
             fail([f"Redeploy package '{package_name}' declares no artifacts - nothing to rebuild"])
 
         print(f"  Redeploy: rebuilding all {len(package.artifacts)} artifact(s) of {package.name} v{package.version}")
 
-        return [artifact.matrix_entry(package) for artifact in package.artifacts], [
+        return [artifact.matrix_entry(package, repo_name) for artifact in package.artifacts], [
             {
                 "name": package.name,
                 "version": package.version,
@@ -448,11 +468,25 @@ def run_test_mode(packages: list[Package]) -> None:
 
 def run_deploy_mode(packages: list[Package]) -> None:
     """Emit the deploy matrices for whatever still needs releasing."""
+    repo_name = os.environ.get("REPO_NAME", "")
+    try:
+        validate_name(repo_name, "Repository name")
+        # Validate every declared artifact before git access or change filtering.
+        for package in packages:
+            for artifact in package.artifacts:
+                release_id(repo_name, package.name, artifact.name, package.version)
+    except ValueError as error:
+        fail([str(error)])
+
     redeploy_package_version = os.environ.get("REDEPLOY_PACKAGE_VERSION", "").strip()
     if redeploy_package_version:
-        all_artifacts, changed_packages = collect_redeploy_package_version(packages, redeploy_package_version)
+        all_artifacts, changed_packages = collect_redeploy_package_version(
+            packages, redeploy_package_version, repo_name
+        )
     else:
-        all_artifacts, changed_packages = collect_changed_artifacts(packages, get_released_tags(), get_head_sha())
+        all_artifacts, changed_packages = collect_changed_artifacts(
+            packages, get_released_tags(), get_head_sha(), repo_name
+        )
 
     docker_artifacts = [a for a in all_artifacts if a["type"] == "docker"]
     lambda_artifacts = [a for a in all_artifacts if a["type"] == "lambda"]

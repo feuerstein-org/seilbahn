@@ -5,6 +5,7 @@
   "description": "One artifact published by a deploy job, written as JSON by deploy.yml and read by the update-version-manifest action. Validating these before the manifest is written is what keeps a malformed value from being committed to the CDK repo. The `version` and name patterns below therefore mirror bergschacht's version-manifest.schema.json.",
   "type": "object",
   "required": [
+    "package",
     "name",
     "type",
     "version"
@@ -33,7 +34,9 @@
     "imageTag": {
       "type": "string",
       "minLength": 1,
-      "description": "image only. Tag the image was pushed under."
+      "description": "image only. Tag the image was pushed under.",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+      "maxLength": 128
     },
     "bucket": {
       "type": "string",
@@ -52,6 +55,10 @@
         "const": "null"
       },
       "description": "lambda only. S3 object version id - what pins the deploy to this exact upload."
+    },
+    "package": {
+      "$ref": "#/$defs/artifactName",
+      "description": "Owning package; identifies the manifest packages entry."
     }
   },
   "allOf": [
@@ -107,12 +114,12 @@
   "$defs": {
     "artifactName": {
       "type": "string",
-      "pattern": "^[a-zA-Z0-9-_]+$",
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]*$",
       "description": "Must match the manifest's key pattern in bergschacht"
     },
     "version": {
       "type": "string",
-      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
       "description": "Semantic version, matching the pattern the version manifest enforces."
     }
   }
