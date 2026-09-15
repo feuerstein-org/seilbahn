@@ -44,23 +44,6 @@ outputs:
 runs:
   using: composite
   steps:
-    # Every deploy result is checked against deploy-result.schema.json before any of it reaches the manifest.
-    - name: Validate deploy results against the schema
-      shell: bash
-      env:
-        SCHEMA: ${{ github.action_path }}/../../../deploy-result.schema.json
-        RESULTS_DIR: ${{ inputs.results-dir }}
-      run: |
-        shopt -s nullglob
-        results=("$RESULTS_DIR"/*.json)
-        if [ ${#results[@]} -eq 0 ]; then
-          echo "::error::No deploy result JSON files found in $RESULTS_DIR"
-          exit 1
-        fi
-        pipx run --spec 'check-jsonschema==0.33.0' check-jsonschema \
-          --schemafile "$SCHEMA" \
-          "${results[@]}"
-
     - id: run
       shell: bash
       env:

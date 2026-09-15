@@ -106,40 +106,9 @@ jobs:
           fi
 
       - name: Move major/minor alias tags
-        env:
-          VERSION: ${{ matrix.package.version }}
-          PACKAGE_NAME: ${{ matrix.package.name }}
-        run: |
-          # Only allow X.Y.X formatted tags
-          if [[ ! "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
-            echo "Version $VERSION is not X.Y.Z - skipping alias tags."
-            exit 0
-          fi
-
-          HEAD_SHA=$(git rev-parse HEAD)
-
-          for ALIAS in "${PACKAGE_NAME}/v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" "${PACKAGE_NAME}/v${BASH_REMATCH[1]}"; do
-            # Empty when the alias does not exist yet.
-            ALIAS_SHA=$(git ls-remote origin "refs/tags/$ALIAS" | cut -f1)
-
-            if [ "$(git cat-file -t "$ALIAS_SHA" 2> /dev/null)" = "tag" ]; then
-              echo "::warning::$ALIAS is an annotated release tag - not overwriting it with an alias."
-              continue
-            fi
-
-            # An alias only ever moves forward, so re-running an old workflow run cannot drag it back onto older code.
-            if [ -n "$ALIAS_SHA" ] && ! git merge-base --is-ancestor "$ALIAS_SHA" "$HEAD_SHA" 2> /dev/null; then
-              echo "::warning::$ALIAS is at ${ALIAS_SHA:0:8}, not an ancestor of ${HEAD_SHA:0:8} - a newer release owns it. Leaving it alone."
-              continue
-            fi
-
-            # Atomic create
-            if git push --force-with-lease="refs/tags/$ALIAS:$ALIAS_SHA" origin "$HEAD_SHA:refs/tags/$ALIAS"; then
-              echo "$ALIAS -> ${HEAD_SHA:0:8}"
-            else
-              echo "::warning::$ALIAS changed on the remote while this job ran (concurrent release). Leaving it to that run."
-            fi
-          done
+        uses: haya14busa/action-update-semver@v1
+        with:
+          tag: ${{ matrix.package.name }}/v${{ matrix.package.version }}
 
   deploy-docker-artifacts:
     name: Publish Docker image ${{ matrix.artifact.artifact_id }}

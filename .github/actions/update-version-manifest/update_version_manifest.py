@@ -136,11 +136,28 @@ def validate_manifest_source(manifest: JsonObject, repo_name: str, source_repo: 
             raise ValueError(msg)
 
 
-def validate_updates(manifest: JsonObject, repo_name: str, source_repo: str, artifacts: list[JsonObject]) -> None:
+def validate_updates(manifest: JsonObject, repo_name: str, source_repo: str, artifacts: list[Any]) -> None:
     """Reject ambiguous batches or incompatible manifests before mutating anything."""
     validate_manifest_source(manifest, repo_name, source_repo)
     seen: set[tuple[str, str, str]] = set()
     for artifact in artifacts:
+        if not isinstance(artifact, dict) or any(not isinstance(v, str) or not v for v in artifact.values()):
+            msg = "Deploy results must be objects containing non-empty strings"
+            raise ValueError(msg)
+        fields = {
+            "image": {"repository", "imageTag"},
+            "lambda": {"bucket", "key", "objectVersion"},
+        }.get(artifact.get("type", ""))
+        if fields is None:
+            msg = f"Unknown artifact type '{artifact.get('type')}'"
+            raise ValueError(msg)
+        fields |= {"package", "name", "type", "version"}
+        if artifact.keys() != fields:
+            msg = f"A {artifact['type']} deploy result requires exactly these fields: {', '.join(sorted(fields))}"
+            raise ValueError(msg)
+        if artifact.get("objectVersion") == "null":
+            msg = "Lambda objectVersion must not be 'null'"
+            raise ValueError(msg)
         package = artifact["package"]
         name = artifact["name"]
         identity = (package, artifact["type"], name)
@@ -153,14 +170,11 @@ def validate_updates(manifest: JsonObject, repo_name: str, source_repo: str, art
             if artifact["imageTag"] != expected_tag:
                 msg = f"Image tag for {repo_name}/{package}/{name} must be '{expected_tag}'"
                 raise ValueError(msg)
-        elif artifact["type"] == "lambda":
+        else:
             expected_key = lambda_key(repo_name, package, name, artifact["version"])
             if artifact["key"] != expected_key:
                 msg = f"Lambda key for {repo_name}/{package}/{name} must be '{expected_key}'"
                 raise ValueError(msg)
-        else:
-            msg = f"Unknown artifact type '{artifact['type']}'"
-            raise ValueError(msg)
 
 
 def apply_updates(
@@ -330,9 +344,8 @@ def main() -> int:
         print(f"Error: No deploy result JSON files found in {results_dir}")
         return 1
 
-    artifacts: list[JsonObject] = [json.loads(f.read_text()) for f in result_files]
-
     try:
+        artifacts: list[JsonObject] = [json.loads(f.read_text()) for f in result_files]
         ok, resolved_changed = commit_manifest(env, artifacts)
     except ValueError as error:
         print(f"Error: {error}")

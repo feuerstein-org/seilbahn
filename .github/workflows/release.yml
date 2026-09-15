@@ -40,7 +40,6 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Validate version and check for collisions
-        id: parse
         env:
           VERSION: ${{ inputs.version }}
         run: |
@@ -48,11 +47,6 @@ jobs:
             echo "::error::Version '$VERSION' is not in vMAJOR.MINOR.PATCH form."
             exit 1
           fi
-
-          MAJOR_TAG="v${BASH_REMATCH[1]}"
-          MINOR_TAG="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
-          echo "major_tag=$MAJOR_TAG" >> "$GITHUB_OUTPUT"
-          echo "minor_tag=$MINOR_TAG" >> "$GITHUB_OUTPUT"
 
           if git ls-remote --tags origin | grep -q "refs/tags/$VERSION$"; then
             echo "::error::Tag $VERSION already exists on origin. Bump the version."
@@ -87,17 +81,15 @@ jobs:
             git push origin HEAD:master
           fi
 
-      - name: Create and push tags
+      - name: Create and push version tag
         env:
           VERSION: ${{ inputs.version }}
-          MAJOR_TAG: ${{ steps.parse.outputs.major_tag }}
-          MINOR_TAG: ${{ steps.parse.outputs.minor_tag }}
         run: |
-          SHA=$(git rev-parse HEAD)
-          git tag -a "$VERSION"   -m "$VERSION" "$SHA"
-          git tag -f "$MAJOR_TAG" "$SHA"
-          git tag -f "$MINOR_TAG" "$SHA"
-
+          git tag -a "$VERSION" -m "$VERSION"
           git push origin "$VERSION"
-          git push -f origin "$MAJOR_TAG"
-          git push -f origin "$MINOR_TAG"
+
+      - name: Move major/minor alias tags
+        uses: haya14busa/action-update-semver@v1
+        with:
+          tag: ${{ inputs.version }}
+          github_token: ${{ steps.app-token.outputs.token }}

@@ -85,7 +85,7 @@ On every push the deploy workflow runs **once, at the tip** of whatever was push
 
 ## Version tags and their aliases
 
-Every release of a package produces three tags at the same commit:
+Full release tags are immutable - major/minor aliases follow the last release run, including reruns:
 
 | Tag                    |  Moves? | Use it for                                                    |
 | ---------------------- |  ------ | ------------------------------------------------------------- |
@@ -95,7 +95,7 @@ Every release of a package produces three tags at the same commit:
 
 ```toml
 [tool.uv.sources]
-# always the latest 0.x of the library
+# Follow the library's 0.x alias, uv.lock pins the resolved commit.
 grundgeruest-telemetry-python = { git = "https://github.com/feuerstein-org/grundgeruest.git", subdirectory = "packages/grundgeruest-telemetry-python", tag = "grundgeruest-telemetry-python/v0" }
 ```
 
