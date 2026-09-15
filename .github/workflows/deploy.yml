@@ -1,7 +1,7 @@
 name: Deploy
 
 # Deploy pipeline for Feuerstein service repos. Callers invoke this
-# via `uses: feuerstein-org/seilbahn/.github/workflows/deploy.yml@v2.2.0 from
+# via `uses: feuerstein-org/seilbahn/.github/workflows/deploy.yml@v2.3.0 from
 # their own deploy workflow. See README.md for the caller template.
 #
 # What gets built is defined in `seilbahn.toml`
@@ -57,7 +57,7 @@ jobs:
 
       - name: Extract packages and artifacts from seilbahn.toml
         id: config
-        uses: feuerstein-org/seilbahn/.github/actions/extract-config@v2.2.0
+        uses: feuerstein-org/seilbahn/.github/actions/extract-config@v2.3.0
         with:
           mode: deploy
           redeploy-package-version: ${{ inputs.redeploy_package_version }}
@@ -431,7 +431,7 @@ jobs:
       # path filter).
       - name: Update version manifest
         id: update
-        uses: feuerstein-org/seilbahn/.github/actions/update-version-manifest@v2.2.0
+        uses: feuerstein-org/seilbahn/.github/actions/update-version-manifest@v2.3.0
         with:
           repo-name: ${{ env.REPO_NAME }}
           commit-sha: ${{ github.sha }}
