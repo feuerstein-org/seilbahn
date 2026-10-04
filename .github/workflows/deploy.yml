@@ -1,7 +1,7 @@
 name: Deploy
 
 # Deploy pipeline for Feuerstein service repos. Callers invoke this
-# via `uses: feuerstein-org/seilbahn/.github/workflows/deploy.yml@v2.3.0 from
+# via `uses: feuerstein-org/seilbahn-public/.github/workflows/deploy.yml@v2.4.0 from
 # their own deploy workflow. See README.md for the caller template.
 #
 # What gets built is defined in `seilbahn.toml`
@@ -11,9 +11,15 @@ on:
     # caller's repository context. Required from the caller:
     #   vars.CICD_ACCOUNT_ID, vars.AWS_REGION, vars.ECR_REPOSITORY_NAME,
     #   vars.LAMBDA_S3_BUCKET_NAME, vars.CDK_REPO_OWNER, vars.CDK_REPO_NAME,
-    #   vars.DEPS_CLIENT_ID, vars.CDK_REPO_CLIENT_ID (`prod` environment)
-    # Secrets (forward with `secrets: inherit` in the caller):
+    #   vars.CDK_REPO_CLIENT_ID (`prod` environment)
+    #   vars.DEPS_CLIENT_ID is optional, for private dependencies.
+    # Secrets (forward by name, or inherit within the same organization):
     #   secrets.CDK_REPO_APP_PRIVATE_KEY, secrets.DEPS_APP_PRIVATE_KEY
+    secrets:
+      DEPS_APP_PRIVATE_KEY:
+        required: false
+      CDK_REPO_APP_PRIVATE_KEY:
+        required: false
     inputs:
       redeploy_package_version:
         description: >
@@ -57,7 +63,7 @@ jobs:
 
       - name: Extract packages and artifacts from seilbahn.toml
         id: config
-        uses: feuerstein-org/seilbahn/.github/actions/extract-config@v2.3.0
+        uses: feuerstein-org/seilbahn-public/.github/actions/extract-config@v2.4.0
         with:
           mode: deploy
           redeploy-package-version: ${{ inputs.redeploy_package_version }}
@@ -129,6 +135,7 @@ jobs:
       matrix:
         artifact: ${{ fromJson(needs.extract-config.outputs.docker_artifacts) }}
     env:
+      HAS_DEPS_CREDENTIALS: ${{ vars.DEPS_CLIENT_ID != '' && secrets.DEPS_APP_PRIVATE_KEY != '' }}
       ECR_REPOSITORY: ${{ vars.CICD_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.ECR_REPOSITORY_NAME }}
     steps:
       - uses: actions/checkout@v7
@@ -182,7 +189,7 @@ jobs:
             type=raw,value=${{ steps.docker-tag.outputs.image_tag }}
 
       - name: Generate token for private deps
-        if: steps.check-image.outputs.exists != 'true'
+        if: steps.check-image.outputs.exists != 'true' && env.HAS_DEPS_CREDENTIALS == 'true'
         id: deps-token
         uses: actions/create-github-app-token@v3
         with:
@@ -206,8 +213,7 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=${{ matrix.artifact.artifact_id }}
           cache-to: type=gha,mode=max,scope=${{ matrix.artifact.artifact_id }}
-          secrets: |
-            gh_deps_token=${{ steps.deps-token.outputs.token }}
+          secrets: ${{ steps.deps-token.outputs.token != '' && format('gh_deps_token={0}', steps.deps-token.outputs.token) || '' }}
 
       - name: Save deploy result
         run: |
@@ -247,6 +253,7 @@ jobs:
       matrix:
         artifact: ${{ fromJson(needs.extract-config.outputs.lambda_artifacts) }}
     env:
+      HAS_DEPS_CREDENTIALS: ${{ vars.DEPS_CLIENT_ID != '' && secrets.DEPS_APP_PRIVATE_KEY != '' }}
       LAMBDA_S3_BUCKET_NAME: ${{ vars.LAMBDA_S3_BUCKET_NAME }}
     steps:
       - uses: actions/checkout@v7
@@ -290,7 +297,7 @@ jobs:
           cache: true
 
       - name: Generate token for private deps
-        if: steps.check-lambda.outputs.exists != 'true'
+        if: steps.check-lambda.outputs.exists != 'true' && env.HAS_DEPS_CREDENTIALS == 'true'
         id: deps-token
         uses: actions/create-github-app-token@v3
         with:
@@ -299,7 +306,7 @@ jobs:
           owner: ${{ github.repository_owner }}
 
       - name: Configure git for private deps
-        if: steps.check-lambda.outputs.exists != 'true'
+        if: steps.check-lambda.outputs.exists != 'true' && steps.deps-token.outputs.token != ''
         env:
           GH_DEPS_TOKEN: ${{ steps.deps-token.outputs.token }}
         run: git config --global url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
@@ -431,7 +438,7 @@ jobs:
       # path filter).
       - name: Update version manifest
         id: update
-        uses: feuerstein-org/seilbahn/.github/actions/update-version-manifest@v2.3.0
+        uses: feuerstein-org/seilbahn-public/.github/actions/update-version-manifest@v2.4.0
         with:
           repo-name: ${{ env.REPO_NAME }}
           commit-sha: ${{ github.sha }}

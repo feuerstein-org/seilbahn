@@ -9,9 +9,12 @@ name: Test
 # consumer repo's mise.ci.toml.
 #
 # Callers invoke this via:
-#   uses: feuerstein-org/seilbahn/.github/workflows/test.yml@v2.3.0
+#   uses: feuerstein-org/seilbahn-public/.github/workflows/test.yml@v2.4.0
 on:
   workflow_call:
+    secrets:
+      DEPS_APP_PRIVATE_KEY:
+        required: false
 
 env:
   MISE_OVERRIDE_CONFIG_FILENAMES: "mise.ci.toml"
@@ -19,6 +22,8 @@ env:
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
+    env:
+      HAS_DEPS_CREDENTIALS: ${{ vars.DEPS_CLIENT_ID != '' && secrets.DEPS_APP_PRIVATE_KEY != '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -26,6 +31,7 @@ jobs:
           cache: true
 
       - name: Generate token for private deps
+        if: env.HAS_DEPS_CREDENTIALS == 'true' && github.event_name != 'pull_request_target'
         id: deps-token
         uses: actions/create-github-app-token@v3
         with:
@@ -34,6 +40,7 @@ jobs:
           owner: ${{ github.repository_owner }}
 
       - name: Configure git for private deps
+        if: steps.deps-token.outputs.token != ''
         env:
           GH_DEPS_TOKEN: ${{ steps.deps-token.outputs.token }}
         run: git config --global url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
@@ -54,7 +61,7 @@ jobs:
 
       - name: Read test matrix from seilbahn.toml
         id: config
-        uses: feuerstein-org/seilbahn/.github/actions/extract-config@v2.3.0
+        uses: feuerstein-org/seilbahn-public/.github/actions/extract-config@v2.4.0
         with:
           mode: test
 
@@ -68,6 +75,8 @@ jobs:
         package: ${{ fromJson(needs.discover-packages.outputs.packages) }}
       fail-fast: false
     environment: dev
+    env:
+      HAS_DEPS_CREDENTIALS: ${{ vars.DEPS_CLIENT_ID != '' && secrets.DEPS_APP_PRIVATE_KEY != '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -75,6 +84,7 @@ jobs:
           cache: true
 
       - name: Generate token for private deps
+        if: env.HAS_DEPS_CREDENTIALS == 'true' && github.event_name != 'pull_request_target'
         id: deps-token
         uses: actions/create-github-app-token@v3
         with:
@@ -83,6 +93,7 @@ jobs:
           owner: ${{ github.repository_owner }}
 
       - name: Configure git for private deps
+        if: steps.deps-token.outputs.token != ''
         env:
           GH_DEPS_TOKEN: ${{ steps.deps-token.outputs.token }}
         run: git config --global url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"

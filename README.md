@@ -2,6 +2,8 @@
 
 Shared GitHub Actions reusable workflows and CI scripts for Feuerstein service repos.
 
+As with [bergschacht](https://github.com/feuerstein-org/bergschacht) this repo is used by Feuerstein, I decided to open-source it in case someone likes the idea of having infrastructure versions and package versions pinned to each other.
+
 ## What's in here
 
 ```
@@ -47,8 +49,9 @@ permissions:
 
 jobs:
   deploy:
-    uses: feuerstein-org/seilbahn/.github/workflows/deploy.yml@v2
-    secrets: inherit
+    uses: feuerstein-org/seilbahn-public/.github/workflows/deploy.yml@v2
+    secrets:
+      CDK_REPO_APP_PRIVATE_KEY: ${{ secrets.CDK_REPO_APP_PRIVATE_KEY }}
     # On push this input is empty -> normal change-driven deploy.
     with:
       redeploy_package_version: ${{ inputs.redeploy_package_version }}
@@ -67,8 +70,7 @@ on:
 
 jobs:
   test:
-    uses: feuerstein-org/seilbahn/.github/workflows/test.yml@v2
-    secrets: inherit
+    uses: feuerstein-org/seilbahn-public/.github/workflows/test.yml@v2
 ```
 
 ## How a deploy decides what to ship (change detection)
@@ -124,21 +126,21 @@ Note that for image Lambdas which show an "The function is trying to use a delet
 | `LAMBDA_S3_BUCKET_NAME` | deploy   | S3 bucket Lambda artifacts                                     |
 | `CDK_REPO_OWNER`        | deploy   | GitHub owner of the CDK repo (normally `feuerstein-org`)    |
 | `CDK_REPO_NAME`         | deploy   | CDK repo name (noramlly `bergschacht`) |
-| `DEPS_CLIENT_ID`        | test, deploy | GitHub App **Client ID** for cloning private workspace-org repos pulled in via `[tool.uv.sources]` |
+| `DEPS_CLIENT_ID`        | test, deploy | Optional GitHub App **Client ID** for cloning private dependencies |
 | `CDK_REPO_CLIENT_ID`    | deploy   | GitHub App **Client ID** for committing manifest updates to the CDK repo. Set on the caller's `prod` environment |
 
 ### Secrets
 
 | Secret                     | Used by      | Purpose                                                                                  |
 | -------------------------- | ------------ | ---------------------------------------------------------------------------------------- |
-| `CDK_REPO_APP_PRIVATE_KEY` | deploy       | GitHub App private key for committing manifest updates to the CDK repo (needs `contents: write`) |
-| `DEPS_APP_PRIVATE_KEY`     | test, deploy | GitHub App private key for cloning private workspace-org repos                           |
+| `CDK_REPO_APP_PRIVATE_KEY` | deploy       | Required only for manifest writes: GitHub App private key with `contents: write` on the CDK repo |
+| `DEPS_APP_PRIVATE_KEY`     | test, deploy | Optional GitHub App private key for cloning private dependencies |
 
-Repository vars are inherited from the caller's context automatically. Secrets must be explicitly forwarded with `secrets: inherit` (or per-secret).
+Repository vars are inherited from the caller's context automatically. Note that you need to provide the `DEPS_CLIENT_ID` if some of your dependencies are private, otherwise Seilbahn can't fetch them to build the package.
 
 #### Docker artifacts that pull private deps
 
-The `gh_deps_token` build secret is always passed to `docker/build-push-action`, but it's only consumed by Dockerfiles that explicitly mount it, use a `RUN --mount=type=secret` block if you have depend on private repos.
+A `gh_deps_token` is supplied to Docker builds only when both dependency credentials are configured. Dockerfiles with public dependencies should not require it, private dependencies can use a `RUN --mount=type=secret` block:
 
 ```dockerfile
 RUN --mount=type=secret,id=gh_deps_token \
@@ -167,7 +169,7 @@ The deploy workflow assumes an IAM role named `${repo}-prod-github-actions-role`
 A single `seilbahn.toml` at the **repo root** is the only file seilbahn reads for structure. It declares every package that gets versioned and released, and every artifact each one publishes. Seilbahn will make sure the TOML syntax is correct on every Action run.
 
 ```toml
-#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/v2/seilbahn.schema.json
+#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn-public/v2/seilbahn.schema.json
 schema-version = 2
 
 [defaults]
@@ -185,7 +187,7 @@ path = "packages/ingestion-core"
 A single-crate Rust repo, in full:
 
 ```toml
-#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/v2/seilbahn.schema.json
+#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn-public/v2/seilbahn.schema.json
 schema-version = 2
 
 [packages.schmelzwerk]
@@ -205,7 +207,7 @@ artifacts.schmelzwerk = { type = "docker" }
       files: ^seilbahn\.toml$
       args:
         - --force-filetype=toml
-        - --schemafile=https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/v2/seilbahn.schema.json
+        - --schemafile=https://raw.githubusercontent.com/Feuerstein-Org/seilbahn-public/v2/seilbahn.schema.json
 ```
 
 ### Artifact identity and naming
@@ -290,20 +292,20 @@ In the future when there are more CDK repos or multiple version manifests this w
 Consumers can pin to:
 
 - `@v2` - floating major, gets all 2.x patches and minor additions.
-- `@v2.1` - floating minor, gets 2.1.x patches only.
-- `@v2.1.2` - immutable, never moves. Older exact tags retain their original schema contract.
+- `@v2.4` - floating minor, gets 2.4.x patches only.
+- `@v2.4.0` - immutable, never moves. Older exact tags retain their original schema contract.
 
-`master` is the release branch - it always reflects the most recent release, with internal `uses: feuerstein-org/seilbahn/...@<ref>` lines pinned to the latest `vX.Y.Z`. Day-to-day edits to the composite action source (e.g. `extract_config.py`) land directly on `master`; edits to the workflow YAML files should go via a feature branch + PR so the release workflow's rewrite step has a known starting state.
+`master` is the release branch - it always reflects the most recent release, with internal `uses: feuerstein-org/seilbahn-public/...@<ref>` lines pinned to the latest `vX.Y.Z`. Day-to-day edits to the composite action source (e.g. `extract_config.py`) land directly on `master`; edits to the workflow YAML files should go via a feature branch + PR so the release workflow's rewrite step has a known starting state.
 
-The release workflow pushes commits that modify files under `.github/workflows/`, to do that a GitHub App is used (<https://github.com/organizations/feuerstein-org/settings/apps/feuerstein-seilbahn>).
+The release workflow pushes commits that modify files under `.github/workflows/`, using a GitHub App installed on `seilbahn-public`.
 
-App id and key are set as secrets on the `release` environment and can only be accessed by the master branch.
+Set `RELEASE_CLIENT_ID` as a variable and `RELEASE_APP_PRIVATE_KEY` as a secret on the `release` environment, restricted to the master branch.
 
-To cut a release, run the [`Release workflow`](.github/workflows/release.yml) via **Actions -> Release -> Run workflow**, passing a new, unused v2 semver tag (e.g. `v2.2.0`). The workflow:
+To cut a release, run the [`Release workflow`](.github/workflows/release.yml) via **Actions -> Release -> Run workflow**, passing a new, unused v2 semver tag (e.g. `v2.4.1`). The workflow:
 
 1. Validates the version and refuses to overwrite an existing tag.
-2. Rewrites every `uses: feuerstein-org/seilbahn/...@<ref>` in `.github/workflows/*.yml` to the supplied version.
+2. Rewrites every `uses: feuerstein-org/seilbahn-public/...@<ref>` in `.github/workflows/*.yml` to the supplied version.
 3. Commits and pushes that to `master`.
-4. Creates that immutable tag and advances its minor and major aliases (e.g. `v2.2` and `v2`) to the same commit.
+4. Creates that immutable tag and advances its minor and major aliases (e.g. `v2.4` and `v2`) to the same commit.
 
 > TODO: Appropriate pytest tests to be added.

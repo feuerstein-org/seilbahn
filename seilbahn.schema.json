@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/master/seilbahn.schema.json",
+  "$id": "https://raw.githubusercontent.com/Feuerstein-Org/seilbahn-public/master/seilbahn.schema.json",
   "title": "seilbahn.toml",
   "description": "The config file used everywhere to declare packages and artifacts for deployment",
   "type": "object",
