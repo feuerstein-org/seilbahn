@@ -49,7 +49,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: feuerstein-org/seilbahn-public/.github/workflows/deploy.yml@v2
+    uses: feuerstein-org/seilbahn/.github/workflows/deploy.yml@v2
     secrets:
       CDK_REPO_APP_PRIVATE_KEY: ${{ secrets.CDK_REPO_APP_PRIVATE_KEY }}
     # On push this input is empty -> normal change-driven deploy.
@@ -70,7 +70,7 @@ on:
 
 jobs:
   test:
-    uses: feuerstein-org/seilbahn-public/.github/workflows/test.yml@v2
+    uses: feuerstein-org/seilbahn/.github/workflows/test.yml@v2
 ```
 
 ## How a deploy decides what to ship (change detection)
@@ -169,7 +169,7 @@ The deploy workflow assumes an IAM role named `${repo}-prod-github-actions-role`
 A single `seilbahn.toml` at the **repo root** is the only file seilbahn reads for structure. It declares every package that gets versioned and released, and every artifact each one publishes. Seilbahn will make sure the TOML syntax is correct on every Action run.
 
 ```toml
-#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn-public/v2/seilbahn.schema.json
+#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/v2/seilbahn.schema.json
 schema-version = 2
 
 [defaults]
@@ -187,7 +187,7 @@ path = "packages/ingestion-core"
 A single-crate Rust repo, in full:
 
 ```toml
-#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn-public/v2/seilbahn.schema.json
+#:schema https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/v2/seilbahn.schema.json
 schema-version = 2
 
 [packages.schmelzwerk]
@@ -207,7 +207,7 @@ artifacts.schmelzwerk = { type = "docker" }
       files: ^seilbahn\.toml$
       args:
         - --force-filetype=toml
-        - --schemafile=https://raw.githubusercontent.com/Feuerstein-Org/seilbahn-public/v2/seilbahn.schema.json
+        - --schemafile=https://raw.githubusercontent.com/Feuerstein-Org/seilbahn/v2/seilbahn.schema.json
 ```
 
 ### Artifact identity and naming
@@ -295,16 +295,16 @@ Consumers can pin to:
 - `@v2.4` - floating minor, gets 2.4.x patches only.
 - `@v2.4.0` - immutable, never moves. Older exact tags retain their original schema contract.
 
-`master` is the release branch - it always reflects the most recent release, with internal `uses: feuerstein-org/seilbahn-public/...@<ref>` lines pinned to the latest `vX.Y.Z`. Day-to-day edits to the composite action source (e.g. `extract_config.py`) land directly on `master`; edits to the workflow YAML files should go via a feature branch + PR so the release workflow's rewrite step has a known starting state.
+`master` is the release branch - it always reflects the most recent release, with internal `uses: feuerstein-org/seilbahn/...@<ref>` lines pinned to the latest `vX.Y.Z`. Day-to-day edits to the composite action source (e.g. `extract_config.py`) land directly on `master`; edits to the workflow YAML files should go via a feature branch + PR so the release workflow's rewrite step has a known starting state.
 
-The release workflow pushes commits that modify files under `.github/workflows/`, using a GitHub App installed on `seilbahn-public`.
+The release workflow pushes commits that modify files under `.github/workflows/`, using a GitHub App installed on `seilbahn`.
 
 Set `RELEASE_CLIENT_ID` as a variable and `RELEASE_APP_PRIVATE_KEY` as a secret on the `release` environment, restricted to the master branch.
 
 To cut a release, run the [`Release workflow`](.github/workflows/release.yml) via **Actions -> Release -> Run workflow**, passing a new, unused v2 semver tag (e.g. `v2.4.1`). The workflow:
 
 1. Validates the version and refuses to overwrite an existing tag.
-2. Rewrites every `uses: feuerstein-org/seilbahn-public/...@<ref>` in `.github/workflows/*.yml` to the supplied version.
+2. Rewrites every `uses: feuerstein-org/seilbahn/...@<ref>` in `.github/workflows/*.yml` to the supplied version.
 3. Commits and pushes that to `master`.
 4. Creates that immutable tag and advances its minor and major aliases (e.g. `v2.4` and `v2`) to the same commit.
 

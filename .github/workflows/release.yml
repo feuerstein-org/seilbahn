@@ -4,7 +4,7 @@ run-name: Release ${{ inputs.version }} by @${{ github.actor }}
 # Cuts an immutable semver release of seilbahn.
 #
 # What it does:
-#   1. Rewrites every `uses: feuerstein-org/seilbahn-public/...@v2.4.0 reference in
+#   1. Rewrites every `uses: feuerstein-org/seilbahn/...@v2.4.0 reference in
 #      the workflow files to the new version, then commits + pushes that to
 #      master. master always reflects the latest release's pinned refs.
 #   2. Creates the immutable `vX.Y.Z` tag at that commit.
@@ -59,7 +59,7 @@ jobs:
         run: |
           find .github/workflows -name '*.yml' -print0 \
             | xargs -0 sed -i -E \
-              "s|(feuerstein-org/seilbahn-public/[^@[:space:]]+)@v[0-9]+(\.[0-9]+)*|\1@${VERSION}|g"
+              "s|(feuerstein-org/seilbahn/[^@[:space:]]+)@v[0-9]+(\.[0-9]+)*|\1@${VERSION}|g"
 
           if git diff --quiet; then
             echo "No ref changes required — workflows already pinned to $VERSION (or no internal refs found)."
