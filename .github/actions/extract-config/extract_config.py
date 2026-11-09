@@ -61,6 +61,9 @@ RUNTIME_VERSION_SOURCES: dict[str, tuple[str, str]] = {
     "node": ("package.json", "version"),
 }
 
+# Used when a docker artifact doesn't declare a platform.
+DEFAULT_DOCKER_PLATFORM = "linux/amd64"
+
 
 class ConfigError(Exception):
     """A `seilbahn.toml` that cannot be acted on."""
@@ -108,11 +111,24 @@ class DockerArtifact(Artifact):
     dockerfile: str
     target: str
     """Named multi-stage target; "" builds the final stage."""
+    platform: str
+    """Target platform, e.g. linux/arm64. deploy.yml builds it on a runner of the same architecture."""
+
+    @override
+    def matrix_entry(self, package: Package, repo_name: str) -> MatrixEntry:
+        """Add the build cache scope: one per artifact and platform, with no "/" in it."""
+        entry = super().matrix_entry(package, repo_name)
+        entry["cache_scope"] = f"{entry['artifact_id']}-{self.platform.replace('/', '-')}"
+        return entry
 
     @override
     def build_fields(self) -> MatrixEntry:
-        """The Dockerfile and stage `docker/build-push-action` is pointed at."""
-        return {"dockerfile": self.dockerfile, "target": self.target}
+        """The Dockerfile, stage and platform `docker/build-push-action` is pointed at."""
+        return {
+            "dockerfile": self.dockerfile,
+            "target": self.target,
+            "platform": self.platform,
+        }
 
 
 @dataclass(frozen=True)
@@ -206,6 +222,8 @@ def parse_artifact(artifact_name: str, artifact_table: TomlTable) -> list[Artifa
                     dockerfile=artifact_table.get("dockerfile", "Dockerfile"),
                     # Named multi-stage target; "" builds the final stage.
                     target=artifact_table.get("target", ""),
+                    # The schema limits this to linux/amd64 or linux/arm64.
+                    platform=artifact_table.get("platform", DEFAULT_DOCKER_PLATFORM),
                 )
             )
         else:
