@@ -112,14 +112,7 @@ class DockerArtifact(Artifact):
     target: str
     """Named multi-stage target; "" builds the final stage."""
     platform: str
-    """Target platform, e.g. linux/arm64. deploy.yml builds it on a runner of the same architecture."""
-
-    @override
-    def matrix_entry(self, package: Package, repo_name: str) -> MatrixEntry:
-        """Add the build cache scope: one per artifact and platform, with no "/" in it."""
-        entry = super().matrix_entry(package, repo_name)
-        entry["cache_scope"] = f"{entry['artifact_id']}-{self.platform.replace('/', '-')}"
-        return entry
+    """Platform the image is built for (Docker BuildKit `--platform`), e.g. linux/arm64."""
 
     @override
     def build_fields(self) -> MatrixEntry:

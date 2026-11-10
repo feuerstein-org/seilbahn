@@ -173,7 +173,7 @@
             "linux/arm64"
           ],
           "default": "linux/amd64",
-          "description": "docker only. Image platform. Built natively on a matching GitHub-hosted runner (linux/arm64 on ubuntu-24.04-arm)."
+          "description": "docker only. Specifies the platform of this image for Docker BuildKit."
         },
         "build": {
           "type": "string",

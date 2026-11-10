@@ -118,8 +118,8 @@ jobs:
 
   deploy-docker-artifacts:
     name: Publish Docker image ${{ matrix.artifact.artifact_id }}
-    # Build on a runner of the artifact's own architecture, so no QEMU emulation.
-    runs-on: ${{ matrix.artifact.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    # Select runner based on platform specified by artifact
+    runs-on: ${{ matrix.artifact.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     needs: [extract-config, create-tags]
     # always() + explicit result checks so the job still runs when create-tags is
     # skipped (redeploy mode).
@@ -213,10 +213,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           provenance: false
-          # One scope per artifact and platform (e.g. foerderturm.tailscale-linux-arm64, set by
-          # extract-config), so switching an artifact's platform (or back) doesn't evict the other cache.
-          cache-from: type=gha,scope=${{ matrix.artifact.cache_scope }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.artifact.cache_scope }}
+          cache-from: type=gha,scope=${{ matrix.artifact.artifact_id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.artifact.artifact_id }}
           secrets: ${{ steps.deps-token.outputs.token != '' && format('gh_deps_token={0}', steps.deps-token.outputs.token) || '' }}
 
       - name: Save deploy result
