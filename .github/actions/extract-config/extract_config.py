@@ -215,7 +215,6 @@ def parse_artifact(artifact_name: str, artifact_table: TomlTable) -> list[Artifa
                     dockerfile=artifact_table.get("dockerfile", "Dockerfile"),
                     # Named multi-stage target; "" builds the final stage.
                     target=artifact_table.get("target", ""),
-                    # The schema limits this to linux/amd64 or linux/arm64.
                     platform=artifact_table.get("platform", DEFAULT_DOCKER_PLATFORM),
                 )
             )
