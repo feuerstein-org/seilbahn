@@ -61,6 +61,9 @@ RUNTIME_VERSION_SOURCES: dict[str, tuple[str, str]] = {
     "node": ("package.json", "version"),
 }
 
+# Used when a docker artifact doesn't declare a platform.
+DEFAULT_DOCKER_PLATFORM = "linux/amd64"
+
 
 class ConfigError(Exception):
     """A `seilbahn.toml` that cannot be acted on."""
@@ -108,11 +111,17 @@ class DockerArtifact(Artifact):
     dockerfile: str
     target: str
     """Named multi-stage target; "" builds the final stage."""
+    platform: str
+    """Platform the image is built for (Docker BuildKit `--platform`), e.g. linux/arm64."""
 
     @override
     def build_fields(self) -> MatrixEntry:
-        """The Dockerfile and stage `docker/build-push-action` is pointed at."""
-        return {"dockerfile": self.dockerfile, "target": self.target}
+        """The Dockerfile, stage and platform `docker/build-push-action` is pointed at."""
+        return {
+            "dockerfile": self.dockerfile,
+            "target": self.target,
+            "platform": self.platform,
+        }
 
 
 @dataclass(frozen=True)
@@ -206,6 +215,7 @@ def parse_artifact(artifact_name: str, artifact_table: TomlTable) -> list[Artifa
                     dockerfile=artifact_table.get("dockerfile", "Dockerfile"),
                     # Named multi-stage target; "" builds the final stage.
                     target=artifact_table.get("target", ""),
+                    platform=artifact_table.get("platform", DEFAULT_DOCKER_PLATFORM),
                 )
             )
         else:

@@ -166,6 +166,15 @@
           "default": "",
           "description": "docker only. Named multi-stage target. Omitted builds the final stage."
         },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "linux/amd64",
+            "linux/arm64"
+          ],
+          "default": "linux/amd64",
+          "description": "docker only. Specifies the platform of this image for Docker BuildKit."
+        },
         "build": {
           "type": "string",
           "minLength": 1,
@@ -197,7 +206,8 @@
           "then": {
             "properties": {
               "dockerfile": false,
-              "target": false
+              "target": false,
+              "platform": false
             }
           }
         },

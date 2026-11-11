@@ -241,6 +241,9 @@ published from it.
 # docker
 artifacts.api = { type = "docker", dockerfile = "Dockerfile", target = "api" }
 
+# `platform` is used in Docker BuildKit to specify which platform this image supports
+artifacts.worker = { type = "docker", platform = "linux/arm64" }
+
 # lambda - the repo always says how to fill the zip
 artifacts.collector = { type = "lambda", build = "mise run build-lambda collector", extra-files = ["configs/otel.yaml"] }
 
@@ -253,6 +256,7 @@ artifacts.sample-python-repo = { type = ["docker", "lambda"], build = "mise run 
 | `type`        | -      | -                   | `"docker"`, `"lambda"`, or a list of both.                              |
 | `dockerfile`  | docker | `Dockerfile`        | Package-relative. The build **context is always the repo root**.        |
 | `target`      | docker | final stage         | Named multi-stage target (`docker build --target`).                      |
+| `platform`    | docker | `linux/amd64`       | `linux/amd64` or `linux/arm64`. The platform this image supports, passed to Docker BuildKit. The image is built on a runner of the same architecture. |
 | `build`       | lambda | **required**        | Shell command that fills `output-dir`.                                   |
 | `output-dir`  | lambda | `dist/<artifact>`   | Repo-root-relative directory the `build` command populates.             |
 | `extra-files` | lambda | `[]`                | Package-relative paths copied into the zip, preserving relative layout.  |

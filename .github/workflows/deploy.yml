@@ -118,7 +118,8 @@ jobs:
 
   deploy-docker-artifacts:
     name: Publish Docker image ${{ matrix.artifact.artifact_id }}
-    runs-on: ubuntu-latest
+    # Select runner based on platform specified by artifact
+    runs-on: ${{ matrix.artifact.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     needs: [extract-config, create-tags]
     # always() + explicit result checks so the job still runs when create-tags is
     # skipped (redeploy mode).
@@ -206,6 +207,7 @@ jobs:
           file: ${{ matrix.artifact.package_path }}/${{ matrix.artifact.dockerfile }}
           # Optional named multi-stage target, empty (undeclared) builds the final stage.
           target: ${{ matrix.artifact.target }}
+          platforms: ${{ matrix.artifact.platform }}
           push: true
           tags: ${{ env.ECR_REPOSITORY }}:${{ matrix.artifact.image_tag }}
           labels: ${{ steps.meta.outputs.labels }}
